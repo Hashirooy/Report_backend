@@ -1,0 +1,262 @@
+// Allure results storage. Project is the top-level entity: a project has many
+// runs, a run has many results, a result belongs to a long-lived test case.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Declared worst-first on purpose: a Postgres enum sorts by declaration order,
+/// so `ORDER BY status` puts failures at the top of a run's result list without
+/// a CASE expression. The order carries no other meaning.
+enum TestStatus {
+  failed
+  broken
+  unknown
+  skipped
+  passed
+}
+
+/// Aggregate verdict of a run - separate from how ingestion went.
+enum RunStatus {
+  passed
+  failed
+}
+
+/// Lifecycle of the uploaded allure-results archive.
+enum IngestStatus {
+  pending
+  parsing
+  ready
+  parse_failed
+}
+
+/// Fixture bodies from *-container.json are stored in the same tree as real
+/// steps so a failure in setUp carries its message instead of a bare "broken".
+enum StepKind {
+  step
+  before
+  after
+}
+
+model Project {
+  id            BigInt   @id @default(autoincrement())
+  slug          String   @unique @db.VarChar(64)
+  name          String   @db.VarChar(200)
+  description   String?
+  repositoryUrl String?  @map("repository_url")
+  defaultBranch String   @default("main") @map("default_branch") @db.VarChar(200)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  runs        TestRun[]
+  testCases   TestCase[]
+  results     TestResult[]
+  errorGroups ErrorGroup[]
+  attachments Attachment[]
+
+  @@map("projects")
+}
+
+model TestRun {
+  id        BigInt @id @default(autoincrement())
+  projectId BigInt @map("project_id")
+
+  /// Per-project sequential number shown in the UI and accepted in URLs.
+  /// Allocated under a row lock on the project to survive parallel pipelines.
+  runNumber Int @map("run_number")
+
+  branch      String  @db.VarChar(200)
+  commitSha   String? @map("commit_sha") @db.VarChar(64)
+  environment String? @db.VarChar(64)
+
+  /// (project_id, ci_build_id) is the ingest idempotency key: a retried GitLab
+  /// job updates this run instead of creating a second one.
+  ciBuildId  String? @map("ci_build_id") @db.VarChar(64)
+  ciBuildUrl String? @map("ci_build_url")
+
+  status       RunStatus?
+  ingestStatus IngestStatus @default(pending) @map("ingest_status")
+  ingestError  String?      @map("ingest_error")
+
+  startedAt  DateTime? @map("started_at") @db.Timestamptz(3)
+  finishedAt DateTime? @map("finished_at") @db.Timestamptz(3)
+  durationMs Int?      @map("duration_ms")
+
+  /// Counters exclude superseded retry attempts.
+  total   Int @default(0)
+  passed  Int @default(0)
+  failed  Int @default(0)
+  broken  Int @default(0)
+  skipped Int @default(0)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  results     TestResult[]
+  attachments Attachment[]
+
+  @@unique([projectId, runNumber])
+  @@unique([projectId, ciBuildId])
+  @@index([projectId, runNumber(sort: Desc)])
+  @@index([projectId, finishedAt(sort: Desc)])
+  @@map("test_runs")
+}
+
+/// Stable identity of a test across runs, keyed by the allure historyId.
+model TestCase {
+  id        BigInt @id @default(autoincrement())
+  projectId BigInt @map("project_id")
+  historyId String @map("history_id") @db.VarChar(128)
+
+  fullName String? @map("full_name")
+  name     String
+
+  /// Denormalized from the most recent run for list/filter queries. Not a
+  /// source of truth: the authoritative labels of an execution live on the
+  /// result row, so renaming a suite does not rewrite history.
+  suite          String?   @db.VarChar(500)
+  lastSeenLabels Json?     @map("last_seen_labels")
+  lastSeenAt     DateTime? @map("last_seen_at") @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  project Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  results TestResult[]
+
+  @@unique([projectId, historyId])
+  @@index([projectId, suite])
+  @@map("test_cases")
+}
+
+model TestResult {
+  id         BigInt @id @default(autoincrement())
+  projectId  BigInt @map("project_id")
+  runId      BigInt @map("run_id")
+  testCaseId BigInt @map("test_case_id")
+
+  uuid   String     @db.Uuid
+  status TestStatus
+
+  description String?
+
+  /// Extracted from statusDetails so top-failure queries never scan raw_result.
+  statusMessage String? @map("status_message")
+  statusTrace   String? @map("status_trace")
+  errorGroupId  BigInt? @map("error_group_id")
+
+  startMs    BigInt? @map("start_ms")
+  stopMs     BigInt? @map("stop_ms")
+  durationMs Int?    @map("duration_ms")
+
+  /// Several results may share one historyId inside a single run (framework
+  /// reruns). Only the last attempt counts towards the run counters.
+  isRetry Boolean @default(false) @map("is_retry")
+  attempt Int     @default(1)
+
+  /// Labels/parameters/links snapshot exactly as reported by this execution.
+  labels     Json?
+  parameters Json?
+  links      Json?
+
+  /// Verbatim allure JSON, kept as an escape hatch while the parser matures.
+  /// Written only for failed/broken results and cleared by a retention job;
+  /// never select it in list queries.
+  rawResult Json? @map("raw_result")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  run         TestRun      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  testCase    TestCase     @relation(fields: [testCaseId], references: [id], onDelete: Cascade)
+  errorGroup  ErrorGroup?  @relation(fields: [errorGroupId], references: [id], onDelete: SetNull)
+  steps       TestStep[]
+  attachments Attachment[]
+
+  @@unique([runId, uuid])
+  @@index([runId, status])
+  @@index([testCaseId, runId(sort: Desc)])
+  @@index([errorGroupId])
+  @@index([projectId, createdAt(sort: Desc)])
+  @@map("test_results")
+}
+
+model TestStep {
+  id           BigInt  @id @default(autoincrement())
+  resultId     BigInt  @map("result_id")
+  parentStepId BigInt? @map("parent_step_id")
+
+  kind StepKind @default(step)
+
+  /// Explicit ordering: step rows are inserted in batches, so id order is not
+  /// a reliable proxy for execution order.
+  orderNum         Int        @map("order_num")
+  name             String
+  status           TestStatus
+  durationMs       Int?       @map("duration_ms")
+  message          String?
+  trace            String?
+  parameters       Json?
+  attachmentsCount Int        @default(0) @map("attachments_count")
+
+  result   TestResult @relation(fields: [resultId], references: [id], onDelete: Cascade)
+  parent   TestStep?  @relation("StepTree", fields: [parentStepId], references: [id], onDelete: Cascade)
+  children TestStep[] @relation("StepTree")
+
+  attachments Attachment[]
+
+  @@index([resultId, parentStepId, orderNum])
+  @@map("test_steps")
+}
+
+/// A failure cause shared by many tests, keyed by a fingerprint of the
+/// normalized message plus the first meaningful trace frame.
+model ErrorGroup {
+  id        BigInt @id @default(autoincrement())
+  projectId BigInt @map("project_id")
+
+  fingerprint       String  @db.Char(64)
+  errorType         String? @map("error_type") @db.VarChar(200)
+  normalizedMessage String  @map("normalized_message")
+  sampleMessage     String  @map("sample_message")
+  sampleTrace       String? @map("sample_trace")
+
+  firstSeenAt DateTime @map("first_seen_at") @db.Timestamptz(3)
+  lastSeenAt  DateTime @map("last_seen_at") @db.Timestamptz(3)
+  occurrences Int      @default(0)
+
+  project Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  results TestResult[]
+
+  @@unique([projectId, fingerprint])
+  @@index([projectId, lastSeenAt(sort: Desc)])
+  @@map("error_groups")
+}
+
+/// Schema is in place; ingestion of attachment files is deliberately deferred.
+model Attachment {
+  id        BigInt  @id @default(autoincrement())
+  projectId BigInt  @map("project_id")
+  runId     BigInt  @map("run_id")
+  resultId  BigInt  @map("result_id")
+  stepId    BigInt? @map("step_id")
+
+  name String
+  type String? @db.VarChar(200)
+
+  /// Object storage coordinates; the download URL is signed at request time so
+  /// no expiring link is ever persisted.
+  bucket     String? @db.VarChar(200)
+  storageKey String? @map("storage_key")
+  sizeBytes  Int?    @map("size_bytes")
+
+  project Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  run     TestRun    @relation(fields: [runId], references: [id], onDelete: Cascade)
+  result  TestResult @relation(fields: [resultId], references: [id], onDelete: Cascade)
+  step    TestStep?  @relation(fields: [stepId], references: [id], onDelete: Cascade)
+
+  @@index([resultId])
+  @@map("attachments")
+}

@@ -1,0 +1,41 @@
+{
+  "name": "@reports/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prisma:validate": "prisma validate",
+    "prisma:format": "prisma format",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check:mocks": "npm run build && node scripts/check-mocks.mjs",
+    "start": "node dist/main.js",
+    "worker": "node dist/worker.js"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.3.1",
+    "@fastify/multipart": "^9.0.3",
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/config": "^4.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-fastify": "^11.0.0",
+    "pg-boss": "^10.1.6",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "unzipper": "^0.12.3",
+    "zod": "^4.1.13",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.1"
+  },
+  "devDependencies": {
+    "prisma": "^6.3.1",
+    "@types/node": "^24.0.0",
+    "@types/unzipper": "^0.10.10",
+    "typescript": "~5.9.3"
+  },
+  "prisma": {
+    "schema": "prisma/schema.prisma"
+  }
+}

@@ -1,0 +1,316 @@
+/**
+ * Fixtures for building UI before the API exists. Every export below is parsed
+ * through its schema in `npm run check:mocks`, so a mock can never drift from
+ * the contract it claims to implement.
+ *
+ * Import from './contracts/mocks.js' so this never reaches a prod bundle.
+ */
+import type { ProjectDashboard } from './dashboard.js';
+import type { ResultDetail, ResultListItem } from './result.js';
+import type { RunListItem } from './run.js';
+import type { TestCaseHistory } from './analytics.js';
+
+export const mockProject: ProjectDashboard['project'] = {
+  id: '1',
+  slug: 'autofinance-api',
+  name: 'Autofinance API',
+  description: 'API contract and model tests',
+  repositoryUrl: 'https://git.example.com/autofinance/api-tests',
+  defaultBranch: 'main',
+  createdAt: '2026-08-28T10:00:00.000Z',
+  environments: ['dev', 'staging'],
+};
+
+export const mockRuns: RunListItem[] = [
+  {
+    id: '154',
+    runNumber: 154,
+    branch: 'main',
+    commitSha: 'a13f98c',
+    environment: 'dev',
+    status: 'failed',
+    ingestStatus: 'ready',
+    startedAt: '2026-08-28T09:30:00.000Z',
+    finishedAt: '2026-08-28T09:36:12.000Z',
+    durationMs: 372000,
+    total: 128,
+    passed: 119,
+    failed: 6,
+    broken: 2,
+    skipped: 1,
+    passRate: 93.7,
+  },
+  {
+    id: '153',
+    runNumber: 153,
+    branch: 'main',
+    commitSha: '7c21bd0',
+    environment: 'dev',
+    status: 'passed',
+    ingestStatus: 'ready',
+    startedAt: '2026-08-27T14:14:00.000Z',
+    finishedAt: '2026-08-27T14:19:41.000Z',
+    durationMs: 341000,
+    total: 127,
+    passed: 125,
+    failed: 0,
+    broken: 0,
+    skipped: 2,
+    passRate: 100,
+  },
+];
+
+export const mockDashboard: ProjectDashboard = {
+  project: mockProject,
+  lastRun: {
+    ...mockRuns[0]!,
+    projectId: '1',
+    projectSlug: 'autofinance-api',
+    ciBuildId: '884213',
+    ciBuildUrl: 'https://git.example.com/autofinance/api-tests/-/jobs/884213',
+    ingestError: null,
+    createdAt: '2026-08-28T09:36:20.000Z',
+    errorGroupsCount: 3,
+    retriesCount: 2,
+  },
+  runs: mockRuns,
+  runsPagination: { limit: 20, offset: 0, total: 154 },
+  trend: [
+    {
+      runId: '153',
+      runNumber: 153,
+      status: 'passed',
+      passRate: 100,
+      durationMs: 341000,
+      failed: 0,
+      broken: 0,
+      finishedAt: '2026-08-27T14:19:41.000Z',
+    },
+    {
+      runId: '154',
+      runNumber: 154,
+      status: 'failed',
+      passRate: 93.7,
+      durationMs: 372000,
+      failed: 6,
+      broken: 2,
+      finishedAt: '2026-08-28T09:36:12.000Z',
+    },
+  ],
+  topFailures: [
+    {
+      testCaseId: '42',
+      name: 'POST /application returns valid schema',
+      suite: 'contract/application',
+      lastStatus: 'failed',
+      lastRunId: '154',
+      lastRunNumber: 154,
+      failuresCount: 4,
+      runsAnalyzed: 30,
+      lastError: 'Response schema mismatch: expected property "applicationId"',
+    },
+  ],
+  topErrorGroups: [
+    {
+      id: '7',
+      fingerprint: 'b21c9f0e4a7d5c3188f0a1d2e3b4c5d6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2',
+      errorType: 'AssertionError',
+      normalizedMessage: 'Response schema mismatch: expected property "applicationId"',
+      sampleMessage: 'Response schema mismatch: expected property "applicationId"',
+      firstSeenAt: '2026-08-28T09:31:02.000Z',
+      lastSeenAt: '2026-08-28T09:35:44.000Z',
+      affectedTests: 5,
+      occurrences: 5,
+      isNew: true,
+    },
+    {
+      id: '3',
+      fingerprint: '0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0',
+      errorType: 'TimeoutError',
+      normalizedMessage: 'Timeout of <NUM>ms exceeded waiting for <URL>',
+      sampleMessage: 'Timeout of 30000ms exceeded waiting for /api/v2/scoring',
+      firstSeenAt: '2026-08-14T11:02:19.000Z',
+      lastSeenAt: '2026-08-28T09:34:10.000Z',
+      affectedTests: 3,
+      occurrences: 41,
+      isNew: false,
+    },
+  ],
+  flaky: [
+    {
+      testCaseId: '88',
+      name: 'GET /scoring/:id eventually returns a decision',
+      suite: 'integration/scoring',
+      flipCount: 7,
+      retryPassCount: 4,
+      runsAnalyzed: 30,
+      lastStatus: 'passed',
+    },
+  ],
+  slowest: [
+    {
+      testCaseId: '91',
+      name: 'full application lifecycle',
+      suite: 'e2e/application',
+      durationMs: 48120,
+      medianDurationMs: 31400,
+    },
+  ],
+  window: { runsAnalyzed: 30, fromRunNumber: 125, toRunNumber: 154 },
+};
+
+export const mockResults: ResultListItem[] = [
+  {
+    id: '9001',
+    testCaseId: '42',
+    uuid: 'f4c1a2b3-1d2e-4f5a-9b8c-7d6e5f4a3b2c',
+    name: 'POST /application returns valid schema',
+    fullName: 'tests.contract.application.test_create_application',
+    suite: 'contract/application',
+    status: 'failed',
+    severity: 'critical',
+    durationMs: 1420,
+    isRetry: false,
+    attempt: 2,
+    error: {
+      groupId: '7',
+      type: 'AssertionError',
+      message: 'Response schema mismatch: expected property "applicationId"',
+    },
+  },
+  {
+    id: '9002',
+    testCaseId: '43',
+    uuid: 'aa11bb22-cc33-4d44-8e55-ff6677889900',
+    name: 'GET /application/:id returns 404 for unknown id',
+    fullName: 'tests.contract.application.test_unknown_application',
+    suite: 'contract/application',
+    status: 'passed',
+    severity: 'normal',
+    durationMs: 310,
+    isRetry: false,
+    attempt: 1,
+    error: null,
+  },
+];
+
+export const mockResultDetail: ResultDetail = {
+  ...mockResults[0]!,
+  projectId: '1',
+  runId: '154',
+  runNumber: 154,
+  historyId: '3f0a1b2c3d4e5f60718293a4b5c6d7e8',
+  description: 'Checks that the create-application response matches the OpenAPI schema.',
+  startedAt: '2026-08-28T09:35:42.000Z',
+  finishedAt: '2026-08-28T09:35:44.000Z',
+  trace:
+    'Traceback (most recent call last):\n  File "tests/contract/application.py", line 61, in test_create_application\n    assert_schema(response.json(), schema)\nAssertionError: Response schema mismatch: expected property "applicationId"',
+  labels: [
+    { name: 'suite', value: 'contract/application' },
+    { name: 'severity', value: 'critical' },
+    { name: 'owner', value: 'qa-platform' },
+  ],
+  parameters: [{ name: 'env', value: 'dev' }],
+  links: [
+    { type: 'issue', name: 'AF-1042', url: 'https://jira.example.com/browse/AF-1042' },
+  ],
+  steps: [
+    {
+      id: '5001',
+      kind: 'before',
+      name: 'authorize test client',
+      status: 'passed',
+      durationMs: 180,
+      message: null,
+      trace: null,
+      attachmentsCount: 0,
+      parameters: [],
+      steps: [],
+    },
+    {
+      id: '5002',
+      kind: 'step',
+      name: 'POST /application',
+      status: 'passed',
+      durationMs: 940,
+      message: null,
+      trace: null,
+      attachmentsCount: 1,
+      parameters: [{ name: 'payload', value: '{"amount": 500000}' }],
+      steps: [
+        {
+          id: '5003',
+          kind: 'step',
+          name: 'assert status code is 201',
+          status: 'passed',
+          durationMs: 2,
+          message: null,
+          trace: null,
+          attachmentsCount: 0,
+          parameters: [],
+          steps: [],
+        },
+      ],
+    },
+    {
+      id: '5004',
+      kind: 'step',
+      name: 'validate response against OpenAPI schema',
+      status: 'failed',
+      durationMs: 300,
+      message: 'Response schema mismatch: expected property "applicationId"',
+      trace: 'AssertionError: Response schema mismatch: expected property "applicationId"',
+      attachmentsCount: 0,
+      parameters: [],
+      steps: [],
+    },
+  ],
+  attempts: [
+    { id: '9000', attempt: 1, status: 'failed', durationMs: 1380 },
+    { id: '9001', attempt: 2, status: 'failed', durationMs: 1420 },
+  ],
+};
+
+export const mockHistory: TestCaseHistory = {
+  testCase: {
+    id: '42',
+    historyId: '3f0a1b2c3d4e5f60718293a4b5c6d7e8',
+    name: 'POST /application returns valid schema',
+    fullName: 'tests.contract.application.test_create_application',
+    suite: 'contract/application',
+  },
+  points: [
+    {
+      resultId: '8800',
+      runId: '153',
+      runNumber: 153,
+      branch: 'main',
+      environment: 'dev',
+      status: 'passed',
+      durationMs: 1210,
+      attempt: 1,
+      errorGroupId: null,
+      message: null,
+      finishedAt: '2026-08-27T14:19:02.000Z',
+    },
+    {
+      resultId: '9001',
+      runId: '154',
+      runNumber: 154,
+      branch: 'main',
+      environment: 'dev',
+      status: 'failed',
+      durationMs: 1420,
+      attempt: 2,
+      errorGroupId: '7',
+      message: 'Response schema mismatch: expected property "applicationId"',
+      finishedAt: '2026-08-28T09:35:44.000Z',
+    },
+  ],
+  stats: {
+    runsAnalyzed: 30,
+    passRate: 86.7,
+    flipCount: 3,
+    medianDurationMs: 1290,
+  },
+};
