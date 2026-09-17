@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { ProjectDashboard, ProjectSummary } from '../../contracts/index.js';
 
+import type { Principal } from '../../common/auth/principal.js';
 import { AnalyticsService } from '../analytics/analytics.service.js';
 import { AnalyticsWindowQueryDto } from '../analytics/dto/analytics-window.query.dto.js';
 import { ProjectsService } from '../projects/projects.service.js';
@@ -25,8 +26,12 @@ export class DashboardService {
     private readonly analytics: AnalyticsService,
   ) {}
 
-  async forProject(projectRef: string, query: DashboardQueryDto): Promise<ProjectDashboard> {
-    const project = await this.projects.findByRef(projectRef);
+  async forProject(
+    principal: Principal,
+    projectRef: string,
+    query: DashboardQueryDto,
+  ): Promise<ProjectDashboard> {
+    const project = await this.projects.findByRef(principal, projectRef);
     const projectRow = await this.projects.requireByRef(projectRef);
 
     const runsQuery = Object.assign(new ListRunsQueryDto(), {
@@ -67,8 +72,12 @@ export class DashboardService {
     };
   }
 
-  async summary(projectRef: string, query: DashboardQueryDto): Promise<ProjectSummary> {
-    const dashboard = await this.forProject(projectRef, query);
+  async summary(
+    principal: Principal,
+    projectRef: string,
+    query: DashboardQueryDto,
+  ): Promise<ProjectSummary> {
+    const dashboard = await this.forProject(principal, projectRef, query);
     return {
       project: dashboard.project,
       lastRun: dashboard.lastRun,

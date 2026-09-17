@@ -77,10 +77,23 @@ export interface AllureContainer {
   stop?: number;
 }
 
+/**
+ * An attachment file lifted out of the archive, keyed elsewhere by the `source`
+ * name the result JSON refers to it by.
+ */
+export interface ArchivedAttachment {
+  sizeBytes: number;
+  /** Decoded body for textual attachments within the caps; null otherwise. */
+  content: string | null;
+  truncated: boolean;
+}
+
 /** What the archive reader hands to the parser. */
 export interface AllureArchiveContents {
   results: AllureResult[];
   containers: AllureContainer[];
+  /** Attachment bodies by `source`; a missing key means the file was absent. */
+  attachments: Map<string, ArchivedAttachment>;
 }
 
 const KNOWN: ParsedStatus[] = ['passed', 'failed', 'broken', 'skipped', 'unknown'];

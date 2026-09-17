@@ -19,6 +19,7 @@ export const mockProject: ProjectDashboard['project'] = {
   defaultBranch: 'main',
   createdAt: '2026-08-28T10:00:00.000Z',
   environments: ['dev', 'staging'],
+  myRole: 'maintainer',
 };
 
 export const mockRuns: RunListItem[] = [
@@ -224,6 +225,7 @@ export const mockResultDetail: ResultDetail = {
       message: null,
       trace: null,
       attachmentsCount: 0,
+      attachments: [],
       parameters: [],
       steps: [],
     },
@@ -236,6 +238,16 @@ export const mockResultDetail: ResultDetail = {
       message: null,
       trace: null,
       attachmentsCount: 1,
+      attachments: [
+        {
+          id: '7001',
+          name: 'HTTP response',
+          type: 'application/json',
+          sizeBytes: 412,
+          content: '{"data":{"applicationPut":{"number":"AF-2026-0001"}}}',
+          truncated: false,
+        },
+      ],
       parameters: [{ name: 'payload', value: '{"amount": 500000}' }],
       steps: [
         {
@@ -247,6 +259,7 @@ export const mockResultDetail: ResultDetail = {
           message: null,
           trace: null,
           attachmentsCount: 0,
+          attachments: [],
           parameters: [],
           steps: [],
         },
@@ -261,10 +274,12 @@ export const mockResultDetail: ResultDetail = {
       message: 'Response schema mismatch: expected property "applicationId"',
       trace: 'AssertionError: Response schema mismatch: expected property "applicationId"',
       attachmentsCount: 0,
+      attachments: [],
       parameters: [],
       steps: [],
     },
   ],
+  attachments: [],
   attempts: [
     { id: '9000', attempt: 1, status: 'failed', durationMs: 1380 },
     { id: '9001', attempt: 2, status: 'failed', durationMs: 1420 },

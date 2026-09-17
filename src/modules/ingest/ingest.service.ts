@@ -5,10 +5,17 @@ import { join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { Readable } from 'node:stream';
 
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { IngestAccepted } from '../../contracts/index.js';
 
+import type { MachinePrincipal } from '../../common/auth/principal.js';
 import { QueueService } from '../../queue/queue.service.js';
 import { ProjectsRepository } from '../projects/projects.repository.js';
 import type { IngestArchiveDto } from './dto/ingest-archive.dto.js';
@@ -69,9 +76,13 @@ export class IngestService {
    * soon as the bytes are safe on disk — a CI job should not wait on ten
    * thousand JSON files being parsed.
    */
-  async accept(dto: IngestArchiveDto, upload: StashedUpload): Promise<IngestAccepted> {
+  async accept(
+    dto: IngestArchiveDto,
+    upload: StashedUpload,
+    principal: MachinePrincipal,
+  ): Promise<IngestAccepted> {
     try {
-      const project = await this.resolveProject(dto);
+      const project = await this.resolveProject(dto, principal);
       const run = await this.runs.createOrReuseRun({
         projectId: project.id,
         branch: dto.branch,
@@ -104,10 +115,24 @@ export class IngestService {
     }
   }
 
-  private async resolveProject(dto: IngestArchiveDto) {
+  /**
+   * A project token may only write into its own project, so the `project` field
+   * has to agree with the credential. The legacy shared token carries no
+   * project and keeps its old behaviour, auto-creation included.
+   */
+  private async resolveProject(dto: IngestArchiveDto, principal: MachinePrincipal) {
     const existing = await this.projects.findByRef(dto.project);
-    if (existing) return existing;
 
+    if (principal.projectId !== null) {
+      if (!existing || existing.id !== principal.projectId) {
+        throw new ForbiddenException(
+          `this token may not upload to project "${dto.project}"`,
+        );
+      }
+      return existing;
+    }
+
+    if (existing) return existing;
     if (!dto.autoCreateProject) {
       throw new NotFoundException(`unknown project "${dto.project}"`);
     }

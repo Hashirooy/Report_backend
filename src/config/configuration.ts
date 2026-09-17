@@ -10,17 +10,60 @@ export interface AppConfig {
   database: {
     url: string;
   };
+  auth: {
+    /** HMAC key for session tokens. Rotating it logs everyone out. */
+    jwtSecret: string;
+    /** Session lifetime in seconds. There are no refresh tokens by design. */
+    ttlSeconds: number;
+    cookieName: string;
+    /** Off for plain-HTTP local work; the browser drops secure cookies there. */
+    cookieSecure: boolean;
+  };
   ingest: {
-    /** Shared secret CI sends in X-API-Token. Empty disables the check. */
+    /**
+     * Legacy shared secret CI sends in X-API-Token, valid for every project.
+     * Per-project tokens are the supported mechanism; empty disables this one.
+     */
     token: string;
     uploadDir: string;
     maxUploadBytes: number;
     maxZipEntries: number;
   };
+  apiSpecs: {
+    /**
+     * Largest OpenAPI document accepted. Held in memory while it is parsed, so
+     * this is deliberately far below the archive limit.
+     */
+    maxBytes: number;
+  };
   worker: {
     concurrency: number;
     /** Runs older than this get their raw_result cleared by the retention job. */
     rawResultRetentionDays: number;
+  };
+  reps: {
+    /** Agent CLI executable. Resolved on PATH unless an absolute path is given. */
+    cli: string;
+    model: string;
+    /**
+     * Directory the agent process runs in. It holds `.claude/skills`, and
+     * nothing else — the agent must not see the repository's own CLAUDE.md or
+     * settings. Relative paths resolve against the process working directory.
+     */
+    skillsRoot: string;
+    /** Wall clock for one task before the process is killed. */
+    taskTimeoutMs: number;
+    /** Hard ceiling on API spend per task, passed to the CLI. 0 disables it. */
+    maxBudgetUsd: number;
+    /** How often a running task refreshes its heartbeat and checks for cancel. */
+    heartbeatMs: number;
+    /** Jobs a single worker runs at once. Each one is a whole CLI process. */
+    concurrency: number;
+    /**
+     * Largest document accepted into the database. A task that returns more
+     * than this is rejected rather than silently truncated.
+     */
+    maxArtifactBytes: number;
   };
 }
 
@@ -37,15 +80,34 @@ export default (): AppConfig => ({
   database: {
     url: process.env.DATABASE_URL ?? '',
   },
+  auth: {
+    jwtSecret: process.env.JWT_SECRET ?? 'dev-only-insecure-secret',
+    ttlSeconds: int(process.env.SESSION_TTL_SECONDS, 12 * 60 * 60),
+    cookieName: process.env.SESSION_COOKIE_NAME ?? 'reports_session',
+    cookieSecure: process.env.SESSION_COOKIE_SECURE === 'true',
+  },
   ingest: {
     token: process.env.INGEST_TOKEN ?? '',
     uploadDir: process.env.UPLOAD_DIR ?? 'uploads',
     maxUploadBytes: int(process.env.MAX_UPLOAD_BYTES, 512 * 1024 * 1024),
     maxZipEntries: int(process.env.MAX_ZIP_ENTRIES, 50_000),
   },
+  apiSpecs: {
+    maxBytes: int(process.env.MAX_SPEC_BYTES, 8 * 1024 * 1024),
+  },
   worker: {
     concurrency: int(process.env.PARSE_CONCURRENCY, 2),
     rawResultRetentionDays: int(process.env.RAW_RESULT_RETENTION_DAYS, 30),
+  },
+  reps: {
+    cli: process.env.REPS_CLI ?? 'claude',
+    model: process.env.REPS_MODEL ?? 'claude-sonnet-5',
+    skillsRoot: process.env.REPS_SKILLS_ROOT ?? 'agent-skills',
+    taskTimeoutMs: int(process.env.REPS_TASK_TIMEOUT_MS, 15 * 60_000),
+    maxBudgetUsd: Number(process.env.REPS_MAX_BUDGET_USD ?? 2) || 0,
+    heartbeatMs: int(process.env.REPS_HEARTBEAT_MS, 5_000),
+    concurrency: int(process.env.REPS_CONCURRENCY, 1),
+    maxArtifactBytes: int(process.env.REPS_MAX_ARTIFACT_BYTES, 2 * 1024 * 1024),
   },
 });
 
@@ -57,8 +119,16 @@ export function validateEnv(env: Record<string, unknown>): Record<string, unknow
   if (!env.DATABASE_URL) {
     throw new Error('DATABASE_URL is required');
   }
-  if (env.NODE_ENV === 'production' && !env.INGEST_TOKEN) {
-    throw new Error('INGEST_TOKEN is required in production: ingest would be open to anyone');
+  if (env.NODE_ENV === 'production') {
+    const secret = typeof env.JWT_SECRET === 'string' ? env.JWT_SECRET : '';
+    if (secret.length < 32) {
+      throw new Error('JWT_SECRET of at least 32 characters is required in production');
+    }
+    if (env.SESSION_COOKIE_SECURE !== 'false' && env.SESSION_COOKIE_SECURE !== 'true') {
+      throw new Error('SESSION_COOKIE_SECURE must be set explicitly in production');
+    }
   }
+  // INGEST_TOKEN is no longer required: ingest accepts per-project tokens, and
+  // an unset shared token simply turns the project-wide credential off.
   return env;
 }

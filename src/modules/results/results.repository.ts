@@ -22,6 +22,19 @@ const LIST_SELECT = {
 
 export type ResultListRow = Prisma.TestResultGetPayload<{ select: typeof LIST_SELECT }>;
 
+/** Attachment columns the detail view needs; `bucket` and `storageKey` are not. */
+const ATTACHMENT_SELECT = {
+  id: true,
+  stepId: true,
+  name: true,
+  type: true,
+  sizeBytes: true,
+  content: true,
+  truncated: true,
+} satisfies Prisma.AttachmentSelect;
+
+export type AttachmentRow = Prisma.AttachmentGetPayload<{ select: typeof ATTACHMENT_SELECT }>;
+
 @Injectable()
 export class ResultsRepository {
   constructor(private readonly prisma: PrismaService) {}
@@ -53,6 +66,7 @@ export class ResultsRepository {
         run: { select: { id: true, runNumber: true } },
         errorGroup: { select: { id: true, errorType: true } },
         steps: { orderBy: [{ parentStepId: 'asc' }, { orderNum: 'asc' }] },
+        attachments: { select: ATTACHMENT_SELECT, orderBy: { id: 'asc' } },
       },
     });
   }

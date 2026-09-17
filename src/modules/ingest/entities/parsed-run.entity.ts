@@ -8,6 +8,17 @@ export type ParsedStepKind = 'step' | 'before' | 'after';
 
 export type ParsedStatus = 'passed' | 'failed' | 'broken' | 'skipped' | 'unknown';
 
+export interface ParsedAttachment {
+  name: string;
+  /** The file name inside the archive; kept for diagnosing missing bodies. */
+  source: string | null;
+  type: string | null;
+  sizeBytes: number | null;
+  /** Present for textual attachments the reader could decode. */
+  content: string | null;
+  truncated: boolean;
+}
+
 export interface ParsedStep {
   kind: ParsedStepKind;
   orderNum: number;
@@ -18,6 +29,7 @@ export interface ParsedStep {
   trace: string | null;
   parameters: { name: string; value: string }[];
   attachmentsCount: number;
+  attachments: ParsedAttachment[];
   children: ParsedStep[];
 }
 
@@ -38,6 +50,8 @@ export interface ParsedResult {
   parameters: { name: string; value: string }[];
   links: { type: string | null; name: string | null; url: string }[];
   steps: ParsedStep[];
+  /** Attachments hung off the result itself rather than off a step. */
+  attachments: ParsedAttachment[];
   /** True for every attempt except the last one of its historyId. */
   isRetry: boolean;
   attempt: number;

@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 
+import cookie from '@fastify/cookie';
 import multipart from '@fastify/multipart';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -20,6 +21,16 @@ async function bootstrap(): Promise<void> {
   );
 
   const config = app.get(ConfigService);
+
+  // Parses the session cookie the auth guard reads. Registered before the
+  // guards can run, i.e. before the server starts listening.
+  await app.register(cookie);
+
+  app.enableCors({
+    origin: 'http://localhost:5173',
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
+    credentials: true,
+  })
 
   app.useGlobalPipes(
     new ValidationPipe({

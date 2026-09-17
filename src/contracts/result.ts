@@ -44,6 +44,22 @@ export const ResultListItemSchema = z.object({
 export type ResultListItem = z.infer<typeof ResultListItemSchema>;
 
 /**
+ * A file the test recorded. Textual bodies (an HTTP request, a response, a log)
+ * travel inline; for anything binary or oversized `content` is null and only
+ * the name, type and size are known.
+ */
+export const AttachmentSchema = z.object({
+  id: IdSchema,
+  name: z.string(),
+  type: z.string().nullable(),
+  sizeBytes: z.int().nonnegative().nullable(),
+  content: z.string().nullable(),
+  /** True when `content` holds only the head of a longer body. */
+  truncated: z.boolean(),
+});
+export type Attachment = z.infer<typeof AttachmentSchema>;
+
+/**
  * A node of the execution tree. `kind` distinguishes real steps from fixture
  * bodies lifted out of allure's *-container.json — without those, a failure in
  * setUp shows up as a "broken" test with no explanation.
@@ -57,6 +73,7 @@ export interface Step {
   message: string | null;
   trace: string | null;
   attachmentsCount: number;
+  attachments: Attachment[];
   parameters: { name: string; value: string }[];
   steps: Step[];
 }
@@ -71,6 +88,7 @@ export const StepSchema: z.ZodType<Step> = z.lazy(() =>
     message: z.string().nullable(),
     trace: z.string().nullable(),
     attachmentsCount: z.int().nonnegative(),
+    attachments: z.array(AttachmentSchema),
     parameters: z.array(ParameterSchema),
     steps: z.array(StepSchema),
   }),
@@ -89,6 +107,8 @@ export const ResultDetailSchema = ResultListItemSchema.extend({
   parameters: z.array(ParameterSchema),
   links: z.array(LinkSchema),
   steps: z.array(StepSchema),
+  /** Attachments hung off the test itself rather than off one of its steps. */
+  attachments: z.array(AttachmentSchema),
   /** Other attempts of the same test in the same run, oldest first. */
   attempts: z.array(
     z.object({

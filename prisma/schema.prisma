@@ -42,23 +42,123 @@ enum StepKind {
   after
 }
 
-model Project {
-  id            BigInt   @id @default(autoincrement())
-  slug          String   @unique @db.VarChar(64)
-  name          String   @db.VarChar(200)
-  description   String?
-  repositoryUrl String?  @map("repository_url")
-  defaultBranch String   @default("main") @map("default_branch") @db.VarChar(200)
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+/// Global role. `admin` sees every project and manages users; `member` sees
+/// only the projects it is a member of.
+enum UserRole {
+  admin
+  member
+}
 
+/// Role inside one project. `maintainer` may edit the project and start Reps
+/// jobs on it; `viewer` may only read.
+enum ProjectMemberRole {
+  viewer
+  maintainer
+}
+
+model User {
+  id           BigInt   @id @default(autoincrement())
+  /// Stored lower-cased so the unique index is the login check.
+  email        String   @unique @db.VarChar(320)
+  passwordHash String   @map("password_hash")
+  name         String   @db.VarChar(200)
+  role         UserRole @default(member)
+
+  /// Deactivation instead of deletion: jobs and projects point at this row.
+  /// An inactive user is rejected at login and by the session guard.
+  isActive Boolean @default(true) @map("is_active")
+
+  /// Tokens issued before this moment are refused. Without it a stolen session
+  /// would outlive a password change, since sessions are not stored anywhere.
+  passwordChangedAt DateTime  @default(now()) @map("password_changed_at") @db.Timestamptz(3)
+  lastLoginAt       DateTime? @map("last_login_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  memberships     ProjectMember[] @relation("MemberUser")
+  grantedMembers  ProjectMember[] @relation("MemberGrantedBy")
+  createdProjects Project[]
+  createdTokens   ProjectToken[]
+  repsJobs        RepsJob[]
+  uploadedSpecs   ApiSpec[]
+
+  @@map("users")
+}
+
+model Project {
+  id            BigInt  @id @default(autoincrement())
+  slug          String  @unique @db.VarChar(64)
+  name          String  @db.VarChar(200)
+  description   String?
+  repositoryUrl String? @map("repository_url")
+  defaultBranch String  @default("main") @map("default_branch") @db.VarChar(200)
+
+  /// Null for projects auto-created by an ingest upload, which has no user.
+  createdByUserId BigInt? @map("created_by_user_id")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  createdBy   User?           @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  members     ProjectMember[]
+  tokens      ProjectToken[]
   runs        TestRun[]
   testCases   TestCase[]
   results     TestResult[]
   errorGroups ErrorGroup[]
   attachments Attachment[]
+  repsJobs    RepsJob[]
+  apiSpecs    ApiSpec[]
 
   @@map("projects")
+}
+
+/// Who may see a project. Admins are not listed here: their access comes from
+/// the global role, so promoting someone does not require touching this table.
+model ProjectMember {
+  id        BigInt @id @default(autoincrement())
+  projectId BigInt @map("project_id")
+  userId    BigInt @map("user_id")
+
+  role ProjectMemberRole @default(viewer)
+
+  addedByUserId BigInt?  @map("added_by_user_id")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation("MemberUser", fields: [userId], references: [id], onDelete: Cascade)
+  addedBy User?   @relation("MemberGrantedBy", fields: [addedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, userId])
+  @@index([userId])
+  @@map("project_members")
+}
+
+/// Ingest credential bound to one project, so a leaked CI token cannot write
+/// into someone else's test history. Only the hash is kept: the secret is shown
+/// once, at creation.
+model ProjectToken {
+  id        BigInt @id @default(autoincrement())
+  projectId BigInt @map("project_id")
+
+  /// What this token is for ("gitlab main pipeline"), shown in the settings UI.
+  name      String @db.VarChar(200)
+  /// SHA-256 of the secret, hex. Unique so lookup is by hash alone.
+  tokenHash String @unique @map("token_hash") @db.Char(64)
+  /// Leading characters of the secret, to tell two tokens apart in the list.
+  prefix    String @db.VarChar(12)
+
+  createdByUserId BigInt?   @map("created_by_user_id")
+  lastUsedAt      DateTime? @map("last_used_at") @db.Timestamptz(3)
+  revokedAt       DateTime? @map("revoked_at") @db.Timestamptz(3)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy User?   @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@map("project_tokens")
 }
 
 model TestRun {
@@ -98,6 +198,7 @@ model TestRun {
   project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
   results     TestResult[]
   attachments Attachment[]
+  repsJobs    RepsJob[]
 
   @@unique([projectId, runNumber])
   @@unique([projectId, ciBuildId])
@@ -174,6 +275,7 @@ model TestResult {
   errorGroup  ErrorGroup?  @relation(fields: [errorGroupId], references: [id], onDelete: SetNull)
   steps       TestStep[]
   attachments Attachment[]
+  repsJobs    RepsJob[]
 
   @@unique([runId, uuid])
   @@index([runId, status])
@@ -235,7 +337,9 @@ model ErrorGroup {
   @@map("error_groups")
 }
 
-/// Schema is in place; ingestion of attachment files is deliberately deferred.
+/// One attachment reference from a result or a step. Textual bodies (the HTTP
+/// request and response of an API test, a log, a diff) are carried inline;
+/// binary ones are recorded by name and size only.
 model Attachment {
   id        BigInt  @id @default(autoincrement())
   projectId BigInt  @map("project_id")
@@ -252,11 +356,306 @@ model Attachment {
   storageKey String? @map("storage_key")
   sizeBytes  Int?    @map("size_bytes")
 
+  /// Decoded body, present for textual attachments within the ingest caps.
+  /// Null means the bytes were binary or too large to carry.
+  content   String?
+  /// True when `content` holds only the head of a longer body.
+  truncated Boolean @default(false)
+
   project Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
   run     TestRun    @relation(fields: [runId], references: [id], onDelete: Cascade)
   result  TestResult @relation(fields: [resultId], references: [id], onDelete: Cascade)
   step    TestStep?  @relation(fields: [stepId], references: [id], onDelete: Cascade)
 
   @@index([resultId])
+  @@index([stepId])
   @@map("attachments")
+}
+
+// ---------------------------------------------------------------------------
+// Reps — long-running agent jobs.
+//
+// A Reps job is one user request ("explain why run 154 broke"). It is carried
+// out by a CLI agent in a scratch workspace, in one or more tasks, and the
+// whole thing outlives the HTTP request that created it. Deliberately kept
+// separate from TestRun: that is a test execution reported by CI, this is a
+// unit of AI work about it.
+// ---------------------------------------------------------------------------
+
+/// Lifecycle of a job. `waiting_for_user` is not an error: the agent asked a
+/// question and the job is parked until an answer arrives via /resume.
+enum RepsJobStatus {
+  pending
+  running
+  waiting_for_user
+  succeeded
+  failed
+  cancelled
+}
+
+enum RepsTaskStatus {
+  pending
+  running
+  waiting_for_user
+  succeeded
+  failed
+  cancelled
+}
+
+/// Stages of the fixed route: produce a document, then review it. A rejected
+/// review adds another `generate` task carrying the reviewer's findings.
+enum RepsTaskType {
+  generate
+  validate
+}
+
+enum RepsEventLevel {
+  debug
+  info
+  warn
+  error
+}
+
+model RepsJob {
+  id BigInt @id @default(autoincrement())
+
+  /// Optional anchors: a job may be about a whole project, one test run, one
+  /// execution of a single test, or nothing in particular. All are nullable so
+  /// a free-form job still works. The narrower anchors imply the wider ones —
+  /// a job on a result also carries that result's run and project — so a list
+  /// filtered by run still shows the per-test jobs raised inside it.
+  projectId BigInt? @map("project_id")
+  runId     BigInt? @map("run_id")
+  resultId  BigInt? @map("result_id")
+
+  /// Who asked for it. Null only for jobs created before authentication
+  /// existed. A job with no project anchor is visible to its author alone, so
+  /// this column is what makes the free-form list filterable at all.
+  createdByUserId BigInt? @map("created_by_user_id")
+
+  /// What the job is for; picks the context builder and the prompt preamble.
+  kind        String @db.VarChar(64)
+  userRequest String @map("user_request")
+
+  status RepsJobStatus @default(pending)
+
+  /// Agent session, so a resumed job continues its conversation instead of
+  /// being handed a rebuilt transcript.
+  sessionId String? @map("session_id") @db.VarChar(64)
+
+  /// Content attempts per stage. Process failures are counted on the task, not
+  /// here — a crashed CLI and a rejected document need different recovery.
+  maxAttemptsPerStage Int @default(3) @map("max_attempts_per_stage")
+
+  /// Set by /terminate. The worker polls it: the job may be running in another
+  /// process, so an in-memory AbortController alone would never reach it.
+  cancelRequested Boolean @default(false) @map("cancel_requested")
+
+  error   String?
+  summary String?
+
+  /// Reported by the agent on the final event; null when it never got that far.
+  costUsd Decimal? @map("cost_usd") @db.Decimal(10, 6)
+
+  /// Touched by the running task. A job whose heartbeat went stale was killed
+  /// with its worker and can be requeued.
+  heartbeatAt DateTime? @map("heartbeat_at") @db.Timestamptz(3)
+
+  startedAt  DateTime? @map("started_at") @db.Timestamptz(3)
+  finishedAt DateTime? @map("finished_at") @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project   Project?    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  run       TestRun?    @relation(fields: [runId], references: [id], onDelete: Cascade)
+  result    TestResult? @relation(fields: [resultId], references: [id], onDelete: Cascade)
+  createdBy User?       @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  tasks     RepsTask[]
+  events    RepsEvent[]
+  questions RepsQuestion[]
+  artifacts RepsArtifact[]
+
+  @@index([status, createdAt])
+  @@index([projectId, createdAt(sort: Desc)])
+  @@index([resultId, createdAt(sort: Desc)])
+  @@index([createdByUserId, createdAt(sort: Desc)])
+  @@map("reps_jobs")
+}
+
+model RepsTask {
+  id    BigInt @id @default(autoincrement())
+  jobId BigInt @map("job_id")
+
+  type   RepsTaskType
+  status RepsTaskStatus @default(pending)
+
+  /// Position in the plan and the ids this task waits for. A linear route only
+  /// needs the number, but the orchestrator picks tasks by dependency so a
+  /// branching plan needs no schema change.
+  orderNum  Int      @map("order_num")
+  dependsOn BigInt[] @map("depends_on")
+
+  /// 1-based content attempt of this stage, copied onto the prompt.
+  attempt Int @default(1)
+
+  /// The handoff given to the agent and the JSON it returned, verbatim.
+  input  Json
+  output Json?
+
+  /// Process-level failure (spawn error, timeout, non-zero exit, unparseable
+  /// answer). Contract rejections live in `output`, not here.
+  error String?
+
+  sessionId String? @map("session_id") @db.VarChar(64)
+
+  heartbeatAt DateTime? @map("heartbeat_at") @db.Timestamptz(3)
+  startedAt   DateTime? @map("started_at") @db.Timestamptz(3)
+  finishedAt  DateTime? @map("finished_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  job       RepsJob        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  events    RepsEvent[]
+  questions RepsQuestion[]
+  artifacts RepsArtifact[]
+
+  @@index([jobId, orderNum])
+  @@map("reps_tasks")
+}
+
+/// Append-only progress log. `id` doubles as the polling cursor, so the UI asks
+/// for everything after the last id it drew.
+model RepsEvent {
+  id     BigInt  @id @default(autoincrement())
+  jobId  BigInt  @map("job_id")
+  taskId BigInt? @map("task_id")
+
+  level   RepsEventLevel @default(info)
+  message String
+  data    Json?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  job  RepsJob   @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  task RepsTask? @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, id])
+  @@map("reps_events")
+}
+
+/// A question the agent could not answer from the data it was given. The job
+/// parks until every question of the asking task has an answer.
+model RepsQuestion {
+  id     BigInt  @id @default(autoincrement())
+  jobId  BigInt  @map("job_id")
+  taskId BigInt? @map("task_id")
+
+  /// Id as the agent wrote it, so answers can be matched back in the prompt.
+  externalId String  @map("external_id") @db.VarChar(64)
+  text       String
+  answer     String?
+
+  askedAt    DateTime  @default(now()) @map("asked_at") @db.Timestamptz(3)
+  answeredAt DateTime? @map("answered_at") @db.Timestamptz(3)
+
+  job  RepsJob   @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  task RepsTask? @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, askedAt])
+  @@map("reps_questions")
+}
+
+/// A document the agent produced, body and all. The agent has no filesystem:
+/// it returns the text in its structured answer and it is stored here, which
+/// is also where the review stage and the download endpoint read it from.
+model RepsArtifact {
+  id     BigInt @id @default(autoincrement())
+  jobId  BigInt @map("job_id")
+  taskId BigInt @map("task_id")
+
+  /// File name for the download, and the key a retry overwrites.
+  name      String @db.VarChar(200)
+  mediaType String @map("media_type") @db.VarChar(200)
+  content   String @db.Text
+  /// Byte length of `content`, so the UI can size a download without loading it.
+  sizeBytes Int    @map("size_bytes")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  job  RepsJob  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  task RepsTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, name])
+  @@map("reps_artifacts")
+}
+
+/// A snapshot of an OpenAPI document, as uploaded. Kept whole so a diff can be
+/// recomputed later against a definition that has since changed, and so the
+/// exact bytes the service produced stay reproducible.
+model ApiSpec {
+  id        BigInt @id @default(autoincrement())
+  projectId BigInt @map("project_id")
+
+  /// `info.version` of the document unless the uploader overrode it.
+  version     String @db.VarChar(200)
+  /// `info.title`, so a list of snapshots reads as something other than ids.
+  title       String @db.VarChar(300)
+  /// The OpenAPI or Swagger version the document declares, e.g. "3.1.0".
+  specVersion String @map("spec_version") @db.VarChar(20)
+
+  /// Name of the uploaded file, for showing where a snapshot came from.
+  fileName  String @map("file_name") @db.VarChar(300)
+  /// sha256 of the canonical form, not of the bytes: re-exporting the same API
+  /// with keys in a different order must not look like a new version.
+  checksum  String @db.VarChar(64)
+  /// Exactly what was uploaded.
+  raw       String @db.Text
+  sizeBytes Int    @map("size_bytes")
+  /// The parsed document, for reading one operation without re-parsing `raw`.
+  document  Json   @db.JsonB
+
+  /// Denormalised so a list of snapshots costs one query.
+  operationCount Int @map("operation_count")
+
+  uploadedByUserId BigInt?  @map("uploaded_by_user_id")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  project    Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  uploadedBy User?          @relation(fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+  operations ApiOperation[]
+
+  /// Uploading an unchanged document returns the existing snapshot.
+  @@unique([projectId, checksum])
+  @@index([projectId, createdAt])
+  @@map("api_specs")
+}
+
+/// One endpoint of a snapshot, flattened out of `paths` at upload time.
+/// Comparing two versions of an API is a set operation over these rows; doing
+/// it by walking two OpenAPI trees on every request would not be.
+model ApiOperation {
+  id     BigInt @id @default(autoincrement())
+  specId BigInt @map("spec_id")
+
+  method      String   @db.VarChar(10)
+  /// The template, not a concrete URL: `/users/{id}`.
+  path        String   @db.VarChar(500)
+  operationId String?  @map("operation_id") @db.VarChar(300)
+  summary     String?  @db.VarChar(1000)
+  tags        String[]
+  /// Declared response codes, as written: "200", "default".
+  statusCodes String[] @map("status_codes")
+  deprecated  Boolean  @default(false)
+
+  /// sha256 of the canonical operation object. Two snapshots that agree on
+  /// method and path but differ here are a changed endpoint, not an untouched
+  /// one — which is the whole difference between a useful diff and a list of
+  /// additions and removals.
+  fingerprint String @db.VarChar(64)
+
+  spec ApiSpec @relation(fields: [specId], references: [id], onDelete: Cascade)
+
+  @@unique([specId, method, path])
+  @@index([specId])
+  @@map("api_operations")
 }

@@ -3,6 +3,7 @@ import type { Project } from '@prisma/client';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import type { CreateProjectDto } from './dto/create-project.dto.js';
+import type { UpdateProjectDto } from './dto/update-project.dto.js';
 
 /** How many recent runs the environment filter list is derived from. */
 const ENVIRONMENT_SAMPLE_RUNS = 50;
@@ -22,11 +23,19 @@ export class ProjectsRepository {
     return this.prisma.project.findUnique({ where: { slug: ref } });
   }
 
-  findAll(): Promise<Project[]> {
-    return this.prisma.project.findMany({ orderBy: { name: 'asc' } });
+  /** `scope` is the caller's project pool; null means no restriction. */
+  findAll(scope: bigint[] | null): Promise<Project[]> {
+    return this.prisma.project.findMany({
+      where: scope === null ? {} : { id: { in: scope } },
+      orderBy: { name: 'asc' },
+    });
   }
 
-  create(dto: CreateProjectDto): Promise<Project> {
+  /**
+   * The creator becomes a maintainer in the same transaction. Skipping that
+   * would let a non-admin create a project and immediately lose sight of it.
+   */
+  create(dto: CreateProjectDto, createdByUserId: bigint): Promise<Project> {
     return this.prisma.project.create({
       data: {
         slug: dto.slug,
@@ -34,6 +43,23 @@ export class ProjectsRepository {
         description: dto.description ?? null,
         repositoryUrl: dto.repositoryUrl ?? null,
         defaultBranch: dto.defaultBranch ?? 'main',
+        createdByUserId,
+        members: {
+          create: { userId: createdByUserId, role: 'maintainer', addedByUserId: createdByUserId },
+        },
+      },
+    });
+  }
+
+  /** Undefined leaves a column as it is; null clears the nullable ones. */
+  update(id: bigint, dto: UpdateProjectDto): Promise<Project> {
+    return this.prisma.project.update({
+      where: { id },
+      data: {
+        name: dto.name,
+        description: dto.description,
+        repositoryUrl: dto.repositoryUrl,
+        defaultBranch: dto.defaultBranch,
       },
     });
   }

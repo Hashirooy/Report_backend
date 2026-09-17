@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ProjectMemberRoleSchema } from './auth.js';
 import { IdSchema, IsoDateSchema } from './common.js';
 
 /**
@@ -15,6 +16,11 @@ export const ProjectSchema = z.object({
   createdAt: IsoDateSchema,
   /** Distinct environments seen in recent runs, for filter dropdowns. */
   environments: z.array(z.string()),
+  /**
+   * The caller's role in this project, for hiding controls it cannot use.
+   * Null when access comes from the global admin role rather than a membership.
+   */
+  myRole: ProjectMemberRoleSchema.nullable(),
 });
 export type Project = z.infer<typeof ProjectSchema>;
 
@@ -23,6 +29,7 @@ export const ProjectListItemSchema = ProjectSchema.pick({
   slug: true,
   name: true,
   description: true,
+  myRole: true,
 }).extend({
   lastRunAt: IsoDateSchema.nullable(),
   lastRunPassRate: z.number().min(0).max(100).nullable(),
@@ -42,3 +49,12 @@ export const CreateProjectSchema = z.object({
   defaultBranch: z.string().max(200).default('main'),
 });
 export type CreateProject = z.infer<typeof CreateProjectSchema>;
+
+/** PATCH body: absent fields are left alone, null clears the nullable ones. */
+export const UpdateProjectSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  description: z.string().max(2000).nullable().optional(),
+  repositoryUrl: z.url().nullable().optional(),
+  defaultBranch: z.string().min(1).max(200).optional(),
+});
+export type UpdateProject = z.infer<typeof UpdateProjectSchema>;

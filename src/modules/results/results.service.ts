@@ -1,12 +1,16 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import type { TestStep } from '@prisma/client';
-import type { ResultDetail, ResultListItem, Step } from '../../contracts/index.js';
+import type { Attachment, ResultDetail, ResultListItem, Step } from '../../contracts/index.js';
 
 import { idOf, isoOf, nullableIdOf } from '../../common/utils/serialization.js';
 import { ProjectsService } from '../projects/projects.service.js';
 import { RunsService } from '../runs/runs.service.js';
 import type { ListResultsQueryDto } from './dto/list-results.query.dto.js';
-import { ResultsRepository, type ResultListRow } from './results.repository.js';
+import {
+  ResultsRepository,
+  type AttachmentRow,
+  type ResultListRow,
+} from './results.repository.js';
 
 export interface PaginatedResults {
   items: ResultListItem[];
@@ -82,7 +86,8 @@ export class ResultsService {
       labels,
       parameters: asPairs(row.parameters),
       links: asLinks(row.links),
-      steps: buildStepTree(row.steps),
+      steps: buildStepTree(row.steps, row.attachments),
+      attachments: row.attachments.filter((file) => file.stepId === null).map(toAttachment),
       attempts: attempts.map((attempt) => ({
         id: idOf(attempt.id),
         attempt: attempt.attempt,
@@ -140,16 +145,34 @@ const asLinks = (value: unknown) =>
 const valueOf = (labels: LabelPair[], name: string): string | null =>
   labels.find((label) => label.name === name)?.value ?? null;
 
+const toAttachment = (row: AttachmentRow): Attachment => ({
+  id: idOf(row.id),
+  name: row.name,
+  type: row.type,
+  sizeBytes: row.sizeBytes,
+  content: row.content,
+  truncated: row.truncated,
+});
+
 /**
  * Steps are stored flat with a parent pointer; the client wants the tree. Rows
  * arrive ordered by parent and position, so one pass is enough.
  */
-function buildStepTree(rows: TestStep[]): Step[] {
+function buildStepTree(rows: TestStep[], attachments: AttachmentRow[]): Step[] {
   const nodes = new Map<bigint, Step>();
   const roots: Step[] = [];
 
+  const byStep = new Map<bigint, Attachment[]>();
+  for (const file of attachments) {
+    if (file.stepId === null) continue;
+    const bucket = byStep.get(file.stepId) ?? [];
+    bucket.push(toAttachment(file));
+    byStep.set(file.stepId, bucket);
+  }
+
   for (const row of rows) {
     nodes.set(row.id, {
+      attachments: byStep.get(row.id) ?? [],
       id: idOf(row.id),
       kind: row.kind,
       name: row.name,

@@ -4,6 +4,7 @@ import { Injectable } from '@nestjs/common';
 
 import {
   isFailure,
+  type ParsedAttachment,
   type ParsedResult,
   type ParsedRun,
   type ParsedStep,
@@ -12,12 +13,14 @@ import {
 import {
   normalizeStatus,
   type AllureArchiveContents,
+  type AllureAttachment,
   type AllureContainer,
   type AllureLabel,
   type AllureLink,
   type AllureParameter,
   type AllureResult,
   type AllureStep,
+  type ArchivedAttachment,
 } from './allure-types.js';
 
 /**
@@ -26,7 +29,7 @@ import {
  */
 @Injectable()
 export class AllureParserService {
-  parse({ results, containers }: AllureArchiveContents): ParsedRun {
+  parse({ results, containers, attachments }: AllureArchiveContents): ParsedRun {
     const warnings: string[] = [];
 
     const usable = results.filter((result) => {
@@ -37,7 +40,9 @@ export class AllureParserService {
 
     const fixtures = groupFixtures(usable, containers);
 
-    const parsed = usable.map((raw) => this.convertResult(raw, fixtures.get(raw.uuid!)));
+    const parsed = usable.map((raw) =>
+      this.convertResult(raw, attachments, fixtures.get(raw.uuid!)),
+    );
     markRetries(parsed);
 
     const active = parsed.filter((result) => !result.isRetry);
@@ -65,7 +70,11 @@ export class AllureParserService {
     };
   }
 
-  private convertResult(raw: AllureResult, fixtures?: Fixtures): ParsedResult {
+  private convertResult(
+    raw: AllureResult,
+    bodies: AttachmentBodies,
+    fixtures?: Fixtures,
+  ): ParsedResult {
     const labels = mapLabels(raw.labels);
     const parameters = mapParameters(raw.parameters);
     const fullName = raw.fullName?.trim() || null;
@@ -73,9 +82,9 @@ export class AllureParserService {
 
     let order = 0;
     const steps: ParsedStep[] = [
-      ...(fixtures?.before ?? []).map((step) => convertStep(step, 'before', order++)),
-      ...(raw.steps ?? []).map((step) => convertStep(step, 'step', order++)),
-      ...(fixtures?.after ?? []).map((step) => convertStep(step, 'after', order++)),
+      ...(fixtures?.before ?? []).map((step) => convertStep(step, 'before', order++, bodies)),
+      ...(raw.steps ?? []).map((step) => convertStep(step, 'step', order++, bodies)),
+      ...(fixtures?.after ?? []).map((step) => convertStep(step, 'after', order++, bodies)),
     ];
 
     // A test whose setUp threw carries no statusDetails of its own; without
@@ -108,6 +117,7 @@ export class AllureParserService {
       parameters,
       links: mapLinks(raw.links),
       steps,
+      attachments: mapAttachments(raw.attachments, bodies),
       isRetry: false,
       attempt: 1,
       raw: isFailure(status) ? raw : null,
@@ -119,6 +129,31 @@ interface Fixtures {
   before: AllureStep[];
   after: AllureStep[];
 }
+
+/** Attachment bodies read out of the archive, by the `source` that names them. */
+type AttachmentBodies = Map<string, ArchivedAttachment>;
+
+/**
+ * A declared attachment joined to the file that backs it. A reference with no
+ * file behind it is kept: "the adapter promised a response body and the archive
+ * does not have it" is worth seeing, and dropping the row would hide it.
+ */
+const mapAttachments = (
+  declared: AllureAttachment[] | undefined,
+  bodies: AttachmentBodies,
+): ParsedAttachment[] =>
+  (declared ?? []).map((attachment) => {
+    const source = attachment.source?.trim() || null;
+    const file = source ? bodies.get(source) : undefined;
+    return {
+      name: attachment.name?.trim() || source || '(unnamed attachment)',
+      source,
+      type: attachment.type?.trim() || null,
+      sizeBytes: file?.sizeBytes ?? null,
+      content: file?.content ?? null,
+      truncated: file?.truncated ?? false,
+    };
+  });
 
 const asString = (value: unknown): string | null => {
   if (value === null || value === undefined) return null;
@@ -180,7 +215,12 @@ function deriveSuite(
   return null;
 }
 
-function convertStep(raw: AllureStep, kind: ParsedStepKind, orderNum: number): ParsedStep {
+function convertStep(
+  raw: AllureStep,
+  kind: ParsedStepKind,
+  orderNum: number,
+  bodies: AttachmentBodies,
+): ParsedStep {
   return {
     kind,
     orderNum,
@@ -191,7 +231,8 @@ function convertStep(raw: AllureStep, kind: ParsedStepKind, orderNum: number): P
     trace: raw.statusDetails?.trace?.trim() || null,
     parameters: mapParameters(raw.parameters),
     attachmentsCount: raw.attachments?.length ?? 0,
-    children: (raw.steps ?? []).map((child, index) => convertStep(child, kind, index)),
+    attachments: mapAttachments(raw.attachments, bodies),
+    children: (raw.steps ?? []).map((child, index) => convertStep(child, kind, index, bodies)),
   };
 }
 

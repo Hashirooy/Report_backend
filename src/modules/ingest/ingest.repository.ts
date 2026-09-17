@@ -3,7 +3,12 @@ import { Prisma } from '@prisma/client';
 
 import { chunked } from '../../common/utils/serialization.js';
 import { PrismaService, type PrismaTx } from '../../prisma/prisma.service.js';
-import type { ParsedResult, ParsedRun, ParsedStep } from './entities/parsed-run.entity.js';
+import type {
+  ParsedAttachment,
+  ParsedResult,
+  ParsedRun,
+  ParsedStep,
+} from './entities/parsed-run.entity.js';
 import { fingerprintFailure } from './parser/fingerprint.js';
 
 export interface CreateRunInput {
@@ -132,7 +137,8 @@ export class IngestRepository {
           caseIds,
           errorGroupIds,
         );
-        await this.insertSteps(tx, parsed.results, resultIds);
+        const stepIds = await this.insertSteps(tx, parsed.results, resultIds);
+        await this.insertAttachments(tx, runId, projectId, parsed.results, resultIds, stepIds);
 
         await tx.testRun.update({
           where: { id: runId },
@@ -357,11 +363,12 @@ export class IngestRepository {
     return ids;
   }
 
+  /** Returns the id assigned to each step, which the attachment rows need. */
   private async insertSteps(
     tx: PrismaTx,
     results: ParsedResult[],
     resultIds: bigint[],
-  ): Promise<void> {
+  ): Promise<Map<ParsedStep, bigint>> {
     let pending = 0;
     const count = (steps: ParsedStep[]): void => {
       for (const step of steps) {
@@ -370,7 +377,7 @@ export class IngestRepository {
       }
     };
     results.forEach((result) => count(result.steps));
-    if (!pending) return;
+    if (!pending) return new Map();
 
     const ids = await this.reserveIds(tx, 'test_steps', pending);
     const flat: FlatStep[] = [];
@@ -404,6 +411,61 @@ export class IngestRepository {
 
     for (const batch of chunked(rows)) {
       await tx.testStep.createMany({ data: batch });
+    }
+
+    return new Map(flat.map(({ id, step }) => [step, id]));
+  }
+
+  /**
+   * Attachment rows, including the ones whose body never made it out of the
+   * archive: a reference with no content still tells the reader what the test
+   * meant to record.
+   */
+  private async insertAttachments(
+    tx: PrismaTx,
+    runId: bigint,
+    projectId: bigint,
+    results: ParsedResult[],
+    resultIds: bigint[],
+    stepIds: Map<ParsedStep, bigint>,
+  ): Promise<void> {
+    const rows: Prisma.AttachmentCreateManyInput[] = [];
+
+    const push = (
+      attachments: ParsedAttachment[],
+      resultId: bigint,
+      stepId: bigint | null,
+    ): void => {
+      for (const attachment of attachments) {
+        rows.push({
+          projectId,
+          runId,
+          resultId,
+          stepId,
+          name: attachment.name.slice(0, 500),
+          type: attachment.type?.slice(0, 200) ?? null,
+          sizeBytes: attachment.sizeBytes,
+          content: attachment.content,
+          truncated: attachment.truncated,
+        });
+      }
+    };
+
+    const walk = (steps: ParsedStep[], resultId: bigint): void => {
+      for (const step of steps) {
+        push(step.attachments, resultId, stepIds.get(step) ?? null);
+        walk(step.children, resultId);
+      }
+    };
+
+    results.forEach((result, index) => {
+      const resultId = resultIds[index]!;
+      push(result.attachments, resultId, null);
+      walk(result.steps, resultId);
+    });
+
+    for (const batch of chunked(rows)) {
+      await tx.attachment.createMany({ data: batch });
     }
   }
 }

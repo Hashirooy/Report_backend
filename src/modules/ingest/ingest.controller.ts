@@ -2,13 +2,14 @@ import { BadRequestException, Controller, HttpCode, Post, Req } from '@nestjs/co
 import type { FastifyRequest } from 'fastify';
 import type { IngestAccepted } from '../../contracts/index.js';
 
-import { CiProtected } from '../../common/decorators/ci-protected.decorator.js';
+import type { MachinePrincipal, RequestWithPrincipal } from '../../common/auth/principal.js';
+import { MachineOnly } from '../../common/decorators/auth.decorators.js';
 import { validateDto } from '../../common/utils/validate-dto.js';
 import { IngestArchiveDto } from './dto/ingest-archive.dto.js';
 import { IngestService, type StashedUpload } from './ingest.service.js';
 
 @Controller('api/ingest')
-@CiProtected()
+@MachineOnly()
 export class IngestController {
   constructor(private readonly ingest: IngestService) {}
 
@@ -48,7 +49,10 @@ export class IngestController {
       }
 
       const dto = await validateDto(IngestArchiveDto, fields);
-      return await this.ingest.accept(dto, upload);
+      // The roles guard has already established that this is a machine caller.
+      const principal = (request as FastifyRequest & RequestWithPrincipal)
+        .principal as MachinePrincipal;
+      return await this.ingest.accept(dto, upload, principal);
     } catch (error) {
       await this.ingest.discard(upload);
       throw error;

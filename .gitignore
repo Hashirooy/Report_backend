@@ -5,3 +5,6 @@ dist/
 *.tsbuildinfo
 uploads/
 .DS_Store
+docs
+allure-results-mock
+api-spec-mock
