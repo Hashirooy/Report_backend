@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { ProjectsModule } from '../projects/projects.module.js';
+import { AgentExecutor } from './agent/agent-executor.js';
 import { ApiContractResolver } from './agent/api-contract.resolver.js';
 import { ClaudeCliExecutor } from './agent/claude-cli.executor.js';
 import { PromptBuilder } from './agent/prompt.builder.js';
@@ -29,7 +30,9 @@ import { RepsService } from './reps.service.js';
     ApiContractResolver,
     SkillLibrary,
     PromptBuilder,
-    ClaudeCliExecutor,
+    // Which CLI backs the agent is a deployment choice, so the processor is
+    // given the abstraction and this is the one place that names a CLI.
+    { provide: AgentExecutor, useClass: ClaudeCliExecutor },
     RepsJobProcessor,
     RepsRecoveryService,
   ],

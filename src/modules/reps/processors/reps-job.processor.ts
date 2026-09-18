@@ -11,10 +11,10 @@ import {
   type AgentOutput,
 } from '../agent/agent-output.contract.js';
 import {
+  AgentExecutor,
   AgentProcessError,
-  ClaudeCliExecutor,
   type AgentProgressEvent,
-} from '../agent/claude-cli.executor.js';
+} from '../agent/agent-executor.js';
 import { PromptBuilder, type TaskHandoff } from '../agent/prompt.builder.js';
 import { RunContextBuilder, type JobContext } from '../agent/run-context.builder.js';
 import { RepsRepository } from '../reps.repository.js';
@@ -57,7 +57,7 @@ export class RepsJobProcessor {
     private readonly repo: RepsRepository,
     private readonly context: RunContextBuilder,
     private readonly prompts: PromptBuilder,
-    private readonly executor: ClaudeCliExecutor,
+    private readonly executor: AgentExecutor,
   ) {}
 
   async process({ jobId }: RepsAgentJob): Promise<void> {
