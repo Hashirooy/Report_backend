@@ -35,6 +35,13 @@ export const routes = {
   projectToken: (projectId: string, tokenId: string) =>
     `${API_PREFIX}/projects/${projectId}/tokens/${tokenId}`,
 
+  /** The project's one outbound integration (GET / PUT / DELETE). Maintainer only. */
+  projectIntegration: (projectId: string) => `${API_PREFIX}/projects/${projectId}/integration`,
+  projectIntegrationCatalog: (projectId: string) =>
+    `${API_PREFIX}/projects/${projectId}/integration/variables`,
+  projectIntegrationPreview: (projectId: string) =>
+    `${API_PREFIX}/projects/${projectId}/integration/preview`,
+
   projects: (q?: Query) => `${API_PREFIX}/projects${qs(q)}`,
   project: (projectId: string) => `${API_PREFIX}/projects/${projectId}`,
   projectSummary: (projectId: string, q?: Query) =>
@@ -78,6 +85,9 @@ export const routes = {
   repsJobTerminate: (jobId: string) => `${API_PREFIX}/reps/jobs/${jobId}/terminate`,
   repsArtifact: (jobId: string, artifactId: string) =>
     `${API_PREFIX}/reps/jobs/${jobId}/artifacts/${artifactId}`,
+  /** Sends of the job's report through its project's integration. */
+  repsJobExports: (jobId: string) => `${API_PREFIX}/reps/jobs/${jobId}/exports`,
+  repsJobExportPreview: (jobId: string) => `${API_PREFIX}/reps/jobs/${jobId}/exports/preview`,
 } as const;
 
 /** TanStack Query keys, so cache seeding from /dashboard stays type-safe. */
@@ -86,6 +96,7 @@ export const queryKeys = {
   users: () => ['users'] as const,
   projectMembers: (projectId: string) => ['projects', projectId, 'members'] as const,
   projectTokens: (projectId: string) => ['projects', projectId, 'tokens'] as const,
+  projectIntegration: (projectId: string) => ['projects', projectId, 'integration'] as const,
   projects: () => ['projects'] as const,
   project: (projectId: string) => ['projects', projectId] as const,
   dashboard: (projectId: string) => ['projects', projectId, 'dashboard'] as const,
@@ -101,6 +112,7 @@ export const queryKeys = {
   repsJobs: (q: Query) => ['reps', 'jobs', q] as const,
   repsJob: (jobId: string) => ['reps', 'jobs', jobId] as const,
   repsJobEvents: (jobId: string) => ['reps', 'jobs', jobId, 'events'] as const,
+  repsJobExports: (jobId: string) => ['reps', 'jobs', jobId, 'exports'] as const,
   apiSpecs: (projectId: string) => ['projects', projectId, 'api-specs'] as const,
   apiSpec: (projectId: string, specId: string) =>
     ['projects', projectId, 'api-specs', specId] as const,

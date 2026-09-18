@@ -36,6 +36,24 @@ export interface AppConfig {
      */
     maxBytes: number;
   };
+  integrations: {
+    /**
+     * Encrypts the credentials integrations send. Changing it makes every
+     * stored secret unreadable, so they have to be entered again. Empty means
+     * integrations can be configured without a secret only.
+     */
+    secretKey: string;
+    /**
+     * Hosts a template may target although they resolve to a private address
+     * or use plain http — an internal Jira, for instance. `*.corp.example`
+     * matches subdomains. Everything else must be public and https.
+     */
+    allowedHosts: string[];
+    /** Whole request, connect to last byte. */
+    timeoutMs: number;
+    /** Response body read for the issue key; the rest is dropped. */
+    maxResponseBytes: number;
+  };
   worker: {
     concurrency: number;
     /** Runs older than this get their raw_result cleared by the retention job. */
@@ -95,6 +113,15 @@ export default (): AppConfig => ({
   apiSpecs: {
     maxBytes: int(process.env.MAX_SPEC_BYTES, 8 * 1024 * 1024),
   },
+  integrations: {
+    secretKey: process.env.INTEGRATIONS_SECRET_KEY ?? '',
+    allowedHosts: (process.env.INTEGRATIONS_ALLOWED_HOSTS ?? '')
+      .split(',')
+      .map((host) => host.trim().toLowerCase())
+      .filter(Boolean),
+    timeoutMs: int(process.env.INTEGRATIONS_TIMEOUT_MS, 15_000),
+    maxResponseBytes: int(process.env.INTEGRATIONS_MAX_RESPONSE_BYTES, 1024 * 1024),
+  },
   worker: {
     concurrency: int(process.env.PARSE_CONCURRENCY, 2),
     rawResultRetentionDays: int(process.env.RAW_RESULT_RETENTION_DAYS, 30),
@@ -127,6 +154,10 @@ export function validateEnv(env: Record<string, unknown>): Record<string, unknow
     if (env.SESSION_COOKIE_SECURE !== 'false' && env.SESSION_COOKIE_SECURE !== 'true') {
       throw new Error('SESSION_COOKIE_SECURE must be set explicitly in production');
     }
+  }
+  const integrationsKey = env.INTEGRATIONS_SECRET_KEY;
+  if (typeof integrationsKey === 'string' && integrationsKey !== '' && integrationsKey.length < 32) {
+    throw new Error('INTEGRATIONS_SECRET_KEY must be at least 32 characters when set');
   }
   // INGEST_TOKEN is no longer required: ingest accepts per-project tokens, and
   // an unset shared token simply turns the project-wide credential off.

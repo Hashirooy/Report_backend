@@ -76,12 +76,14 @@ model User {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  memberships     ProjectMember[] @relation("MemberUser")
-  grantedMembers  ProjectMember[] @relation("MemberGrantedBy")
+  memberships     ProjectMember[]      @relation("MemberUser")
+  grantedMembers  ProjectMember[]      @relation("MemberGrantedBy")
   createdProjects Project[]
   createdTokens   ProjectToken[]
   repsJobs        RepsJob[]
   uploadedSpecs   ApiSpec[]
+  integrations    ProjectIntegration[]
+  issueExports    IssueExport[]
 
   @@map("users")
 }
@@ -100,7 +102,7 @@ model Project {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  createdBy   User?           @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdBy   User?               @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
   members     ProjectMember[]
   tokens      ProjectToken[]
   runs        TestRun[]
@@ -110,6 +112,7 @@ model Project {
   attachments Attachment[]
   repsJobs    RepsJob[]
   apiSpecs    ApiSpec[]
+  integration ProjectIntegration?
 
   @@map("projects")
 }
@@ -471,10 +474,11 @@ model RepsJob {
   result    TestResult? @relation(fields: [resultId], references: [id], onDelete: Cascade)
   createdBy User?       @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
 
-  tasks     RepsTask[]
-  events    RepsEvent[]
-  questions RepsQuestion[]
-  artifacts RepsArtifact[]
+  tasks        RepsTask[]
+  events       RepsEvent[]
+  questions    RepsQuestion[]
+  artifacts    RepsArtifact[]
+  issueExports IssueExport[]
 
   @@index([status, createdAt])
   @@index([projectId, createdAt(sort: Desc)])
@@ -585,6 +589,8 @@ model RepsArtifact {
   job  RepsJob  @relation(fields: [jobId], references: [id], onDelete: Cascade)
   task RepsTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
+  issueExports IssueExport[]
+
   @@unique([jobId, name])
   @@map("reps_artifacts")
 }
@@ -658,4 +664,83 @@ model ApiOperation {
   @@unique([specId, method, path])
   @@index([specId])
   @@map("api_operations")
+}
+
+/// Where a project's finished bug reports are sent: an HTTP request its
+/// maintainers compose by hand — URL, headers and a JSON body with placeholders
+/// the report's fields are substituted into.
+model ProjectIntegration {
+  id        BigInt @id @default(autoincrement())
+  /// One per project: a project files its bugs in one place.
+  projectId BigInt @unique @map("project_id")
+
+  /// Shown on the send button ("Jira").
+  name    String  @db.VarChar(200)
+  enabled Boolean @default(true)
+
+  /// method, url, headers, body, response mapping and value maps. Validated by
+  /// IntegrationTemplateSchema on every write, never trusted on read alone.
+  template Json
+
+  /// AES-256-GCM of the credential the headers reference as {{secret}}. Kept
+  /// reversible on purpose — unlike a project token it has to be sent — and
+  /// never returned by the API.
+  secretEncrypted Bytes?  @map("secret_encrypted")
+  /// Last characters of the secret, to tell which one is configured.
+  secretHint      String? @map("secret_hint") @db.VarChar(16)
+
+  createdByUserId BigInt? @map("created_by_user_id")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project   Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy User?         @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  exports   IssueExport[]
+
+  @@map("project_integrations")
+}
+
+enum IssueExportStatus {
+  pending
+  succeeded
+  failed
+}
+
+/// One attempt to send a report through an integration. Kept after the
+/// integration is deleted, so "this bug was filed as AF-1042" survives it.
+model IssueExport {
+  id              BigInt  @id @default(autoincrement())
+  jobId           BigInt  @map("job_id")
+  artifactId      BigInt  @map("artifact_id")
+  integrationId   BigInt? @map("integration_id")
+  /// Snapshot of the integration's name at send time.
+  integrationName String  @map("integration_name") @db.VarChar(200)
+
+  status IssueExportStatus @default(pending)
+
+  /// The rendered target, without headers: they may carry the credential.
+  requestMethod   String  @map("request_method") @db.VarChar(10)
+  requestUrl      String  @map("request_url")
+  responseStatus  Int?    @map("response_status")
+  /// Head of the response body, for diagnosing a failed send.
+  responseExcerpt String? @map("response_excerpt")
+
+  externalKey String? @map("external_key") @db.VarChar(200)
+  externalUrl String? @map("external_url")
+  error       String?
+
+  createdByUserId BigInt? @map("created_by_user_id")
+
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  finishedAt DateTime? @map("finished_at") @db.Timestamptz(3)
+
+  job         RepsJob             @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  artifact    RepsArtifact        @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  integration ProjectIntegration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+  createdBy   User?               @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([jobId, createdAt])
+  @@index([integrationId])
+  @@map("issue_exports")
 }
