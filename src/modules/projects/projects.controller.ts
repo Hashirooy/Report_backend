@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
-import type { Project, ProjectListItem } from '../../contracts/index.js';
+import type { CreatedProject, Project, ProjectListItem } from '../../contracts/index.js';
 
 import type { Principal, UserPrincipal } from '../../common/auth/principal.js';
 import {
@@ -21,7 +21,7 @@ export class ProjectsController {
   }
 
   @Post()
-  create(@Body() dto: CreateProjectDto, @CurrentUser() actor: UserPrincipal): Promise<Project> {
+  create(@Body() dto: CreateProjectDto, @CurrentUser() actor: UserPrincipal): Promise<CreatedProject> {
     return this.projects.create(dto, actor);
   }
 

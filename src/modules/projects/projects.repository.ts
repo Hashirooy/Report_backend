@@ -35,7 +35,11 @@ export class ProjectsRepository {
    * The creator becomes a maintainer in the same transaction. Skipping that
    * would let a non-admin create a project and immediately lose sight of it.
    */
-  create(dto: CreateProjectDto, createdByUserId: bigint): Promise<Project> {
+  create(
+    dto: CreateProjectDto,
+    createdByUserId: bigint,
+    token: { tokenHash: string; prefix: string },
+  ): Promise<Project> {
     return this.prisma.project.create({
       data: {
         slug: dto.slug,
@@ -46,6 +50,14 @@ export class ProjectsRepository {
         createdByUserId,
         members: {
           create: { userId: createdByUserId, role: 'maintainer', addedByUserId: createdByUserId },
+        },
+        tokens: {
+          create: {
+            name: 'Default CI token',
+            tokenHash: token.tokenHash,
+            prefix: token.prefix,
+            createdByUserId,
+          },
         },
       },
     });

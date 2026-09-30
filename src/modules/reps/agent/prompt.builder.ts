@@ -7,9 +7,9 @@ import { SkillLibrary } from './skill.library.js';
 /**
  * Everything a task is given.
  *
- * The agent has no tools, so this is literally all it knows: whatever is not
- * here does not exist as far as the task is concerned. It is stored verbatim on
- * the task row, so a finished job can be read back and it is always clear what
+ * The agent must use only this handoff: whatever is not here must not influence
+ * the answer. It is stored verbatim on the task row, so a finished job can be
+ * read back and it is always clear what
  * the agent actually had in front of it.
  */
 export interface TaskHandoff {
@@ -42,23 +42,72 @@ export interface TaskHandoff {
 const REVIEW_CHECKLISTS: Record<string, string[]> = {
   analyze_test: [
     'The document is a bug report in the structure the api-bug-report skill above defines.',
-    'Required sections are present, labelled and ordered as in the Reference Example: Заголовок, ' +
-      'Окружение, Эндпоинт, Предусловия, Шаги воспроизведения, Ожидаемый результат, ' +
-      'Фактический результат, Swagger, Severity, Priority.',
-    'Нарушение контракта sits between Swagger and Severity when a contract was available ' +
-      '(context.contract.status "matched", or a contract in the request); otherwise its absence is correct.',
-    'Запрос, Ответ and Дополнительная информация are optional sections the skill allows; their ' +
-      'presence is not a defect as long as they hold only data from the context.',
-    'Заголовок starts with `[API]` and names the concrete failure; it carries METHOD and endpoint ' +
-      'when they are known, and omits them (never "Не указано") when they are not.',
-    'Шаги воспроизведения are numbered, concrete, and derived from the context.',
-    'Ожидаемый and Фактический результат are both present and distinguishable.',
-    'The report is written in Russian; only identifiers, codes, JSON and Severity/Priority values stay untranslated.',
-    'Swagger and Нарушение контракта come only from context.contract (or a contract in the request); ' +
-      'no response code or schema is cited that is not there.',
-    'Missing data is marked "Не указано"; for Severity and Priority ' +
-      '"Недостаточно данных для определения" is equally correct.',
-    'No root cause is asserted where the context only supports a possible cause.',
+    'The document starts with one level-one heading and contains exactly nine labelled sections in this order: ' +
+      'Окружение, Метод и эндпоинт, Предусловия, Шаги воспроизведения, Фактический результат, ' +
+      'Ожидаемый результат, Дефект, Фактический ответ, Ожидаемый ответ. Any other section, preamble, ' +
+      'analysis or missing-data list is a defect.',
+    'The heading starts with `[API]`, includes the method and parameterized contract endpoint, ' +
+      'and names the concrete mismatch.',
+    'Окружение and Метод и эндпоинт contain the concrete values established by the context.',
+    'Предусловия contain the known state and authorization conditions required before reproduction.',
+    'Предусловия never contain evidence-quality analysis such as saying that an absent header, body or operation ' +
+      'was not confirmed by the recorded request. An unconfirmed condition is omitted or its limitation is stated ' +
+      'only in the section whose conclusion it affects.',
+    'An unmatched Swagger/OpenAPI operation is contract evidence, not a precondition. When ' +
+      'context.contract.status is "no_match", Ожидаемый результат explicitly states that the observed operation ' +
+      'is absent from the supplied specification and that Swagger/OpenAPI therefore does not establish its expected ' +
+      'response, unless an explicit requirement does. Фактический результат still reports the concrete observed behavior.',
+    'Шаги воспроизведения reproduce the issue by sending the API request with the known triggering condition. ' +
+      'They never instruct the reader to run a test file or inspect an assertion.',
+    'For a response-schema defect in an explicitly successful/valid test scenario, Шаги воспроизведения may say that ' +
+      'all required request fields are correctly filled according to Swagger; exact payload values are not required ' +
+      'unless a value triggers the defect.',
+    'When context.contract.status is "matched", Ожидаемый результат gives a concrete status, field, type, value or ' +
+      'constraint supported by that operation and the test scenario. For "no_match", apply the unmatched-operation ' +
+      'rule above instead. Vague schema-validation wording is a defect.',
+    'Фактический результат gives the concrete observed API status, field, type, value or complete error from the recorded ' +
+      'response. A bare assertion failure or a truncated unknown key is not a concrete actual result.',
+    'Фактический результат contains only directly observed behavior in at most two short sentences: the API status, ' +
+      'concrete response value and exact validator error. It never cites Swagger, explains the cause or names the defect.',
+    'Ожидаемый результат contains only the behavior required by the matching contract or explicit requirement in at ' +
+      'most two short sentences. It never repeats the actual result or explains why the difference is a defect.',
+    'Дефект compares Фактический результат with Ожидаемый результат in at most three short sentences. For a schema or ' +
+      'matcher failure it says what the validator rejected, what Swagger/OpenAPI permits or requires, why the disagreement ' +
+      'made the test fail, and which layer must be corrected. When a matcher rejects a contract-allowed field, Дефект ' +
+      'identifies the runtime validation schema as the failing layer and does not call the API response invalid. Name Zod, ' +
+      'strictObject or another implementation detail only when the supplied context contains that evidence. Do not list ' +
+      'every occurrence, unrelated field, or the complete response schema.',
+    'One report covers exactly one primary defect: the mismatch that caused the recorded assertion. Omit independent ' +
+      'mismatches completely. In particular, do not mention a Content-Type disagreement in a report about a runtime ' +
+      'validator rejecting a contract-allowed field; that requires a separate report.',
+    'Фактический ответ and Ожидаемый ответ are fenced http blocks containing the minimal raw response fragments ' +
+      'that demonstrate the mismatch, without invented body content. When no matching operation or explicit ' +
+      'requirement establishes an expected response, Ожидаемый ответ contains `Не установлено по данным отчёта`.',
+    'For a runtime-validator mismatch where the recorded API field is allowed by the contract, Ожидаемый ответ contains ' +
+      'only the contract-established HTTP status line. Do not add an unrelated media type or repeat the response schema; ' +
+      'the expected correction belongs to the runtime validator and is stated in Дефект.',
+    'A required response property and its integer/string/object type do not establish a concrete value. ' +
+      'Ожидаемый ответ never fills such a property with 0, an empty string, a placeholder, an example or another ' +
+      'guessed value; it uses only an established status line or `Не установлено по данным отчёта`.',
+    'An attachment marked contentAvailable=false, empty=true, or with unavailableReason is not evidence of the ' +
+      'HTTP content. In particular, a zero-byte attachment is not proof that the request or response body was empty.',
+    'When context.result.assertion.actual is present, it takes precedence over context.result.message for detailed ' +
+      'matcher failures. Фактический результат uses its field names, values, types and validation details instead of ' +
+      'quoting an ellipsis, a truncated fragment, or asking for information already present there.',
+    'context.bugReportEvidence is the prepared join of the recorded exchange, assertion and matching contract. ' +
+      'For Фактический ответ, copy response.exactHttpFragment verbatim and report only response.primaryMismatch. ' +
+      'The fragment was rendered from one complete value at one source path. Do not add another mismatchGroups item, ' +
+      'wrap the value in a reconstructed parent object or array, remove fields, reorder fields, or use ellipses.',
+    'A request whose context.bugReportEvidence.request.contentAvailable is false has no recorded concrete payload. ' +
+      'contentAvailable, unavailableReason and attachment availability are control metadata: never mention them in ' +
+      'the document, especially not in Предусловия or Шаги воспроизведения. For a successful schema scenario, use ' +
+      'the required request conditions from contractRule without inventing values.',
+    'context.result.assertion.expected is used as expected API behavior only when it agrees with the matching ' +
+      'Swagger operation or an explicit requirement.',
+    'Every factual value is supported by the request, response, matching contract or explicit user input.',
+    'Missing evidence must never cause a question or block the report. The document explicitly marks an unknown ' +
+      'value as `Не установлено по данным отчёта` in the relevant section and does not invent it.',
+    'The report is written in Russian; API identifiers, codes and HTTP response fragments remain unchanged.',
   ],
 };
 
@@ -67,13 +116,15 @@ const ROLE_INSTRUCTIONS: Record<RepsTaskType, string> = {
     'You are the generation stage of a Reps job.',
     '',
     'Write the requested document and return it after the document marker — you',
-    'have no tools, no filesystem and no network, so the text of the document is',
+    'must not use tools, the filesystem or network; the text of the document is',
     'the answer itself. Base it only on the context and the user request:',
     'anything not given to you there is something you do not know. Prefer naming',
     'concrete tests, error groups and numbers over general advice.',
     '',
-    'If the context genuinely does not let you answer, do not guess: return',
-    'status "needs_input" with specific questions and no document.',
+    'Never ask the user questions and never return status "needs_input". Always',
+    'return the best complete document possible from the available evidence. If a',
+    'required fact is unavailable, state that it is not established by the supplied',
+    'data in the relevant document section instead of guessing or blocking.',
   ].join('\n'),
 
   validate: [
@@ -93,10 +144,9 @@ const ROLE_INSTRUCTIONS: Record<RepsTaskType, string> = {
 };
 
 /**
- * A task's prompt in two parts. `system` replaces Claude Code's own system
- * prompt — the coding-assistant instructions are dead weight for a task with no
- * tools — and holds only what is the same for every job of a kind. `prompt`
- * carries the job's data and goes in over stdin.
+ * A task's prompt in two parts. `system` carries shared role instructions
+ * through the selected CLI's instruction mechanism. `prompt` carries the job's
+ * data and goes in over stdin.
  */
 export interface BuiltPrompt {
   system: string;

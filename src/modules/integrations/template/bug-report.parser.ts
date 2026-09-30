@@ -1,10 +1,10 @@
 /**
  * Fields of a report written by the api-bug-report skill.
  *
- * The skill fixes the format — every section is a bold label ending in a colon
- * on its own line, in a known order — and the review stage rejects a report
- * that strays from it. That makes a deterministic parse reliable enough, and
- * keeps the agent's answer format untouched.
+ * The skill fixes the format — one title heading followed by bold labels in a
+ * known order — and the review stage rejects a report that strays from it.
+ * That makes a deterministic parse reliable enough, and keeps the agent's
+ * answer format untouched.
  *
  * A value the report gives as "Не указано" is null here, so a template can use
  * `default` instead of sending the placeholder text into a tracker field.
@@ -20,8 +20,12 @@ export interface ParsedBugReport {
   stepsText: string | null;
   expected: string | null;
   actual: string | null;
+  defect: string | null;
   request: string | null;
+  /** Raw observed HTTP response fragment from `Фактический ответ`. */
   response: string | null;
+  /** Raw contractually expected HTTP response fragment. */
+  expectedResponse: string | null;
   swagger: string | null;
   contractViolation: string | null;
   severity: string | null;
@@ -36,12 +40,16 @@ const LABELS: Record<string, SectionKey> = {
   'заголовок': 'title',
   'окружение': 'environment',
   'эндпоинт': 'endpoint',
+  'метод и эндпоинт': 'endpoint',
   'предусловия': 'preconditions',
   'шаги воспроизведения': 'stepsText',
   'ожидаемый результат': 'expected',
   'фактический результат': 'actual',
+  'дефект': 'defect',
   'запрос': 'request',
   'ответ': 'response',
+  'фактический ответ': 'response',
+  'ожидаемый ответ': 'expectedResponse',
   'swagger': 'swagger',
   'нарушение контракта': 'contractViolation',
   'severity': 'severity',
@@ -65,7 +73,10 @@ export function parseBugReport(markdown: string, fallbackTitle: string | null = 
     const key = label ? LABELS[label[1].toLowerCase()] : undefined;
     if (label && key) {
       current = key;
-      sections.set(key, label[2] ? [label[2]] : []);
+      // The reference format puts a Markdown hard break after scalar labels.
+      // It is formatting, not the field's value.
+      const inline = label[2].trim() === '\\' ? '' : label[2];
+      sections.set(key, inline ? [inline] : []);
       continue;
     }
     // Text before the first known label (a heading, a preamble) belongs to no field.
@@ -92,8 +103,10 @@ export function parseBugReport(markdown: string, fallbackTitle: string | null = 
     stepsText,
     expected: field('expected'),
     actual: field('actual'),
+    defect: field('defect'),
     request: field('request'),
     response: field('response'),
+    expectedResponse: field('expectedResponse'),
     swagger: field('swagger'),
     contractViolation: field('contractViolation'),
     severity: field('severity'),

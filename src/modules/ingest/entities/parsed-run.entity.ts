@@ -42,6 +42,9 @@ export interface ParsedResult {
   status: ParsedStatus;
   statusMessage: string | null;
   statusTrace: string | null;
+  /** Full matcher values; unlike statusMessage these are not pretty-print summaries. */
+  assertionActual: string | null;
+  assertionExpected: string | null;
   startMs: number | null;
   stopMs: number | null;
   durationMs: number | null;

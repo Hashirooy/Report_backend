@@ -36,11 +36,9 @@ export interface AgentRunRequest {
    * working directory — rather than to fold it into the prompt.
    */
   systemPrompt: string;
-  /**
-   * Session to continue. When absent a fresh session is started under
-   * `newSessionId` so the id is known before the process says anything.
-   */
+  /** Session to continue, if the CLI supports resuming it. */
   resumeSessionId?: string | null;
+  /** Preferred id for CLIs that accept one; Codex reports its own id. */
   newSessionId: string;
   signal: AbortSignal;
   /** Called as the stream arrives. Must not throw and must not block. */

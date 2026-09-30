@@ -41,6 +41,10 @@ export class RunsRepository {
     return this.prisma.testRun.count({ where: this.whereOf(projectId, query) });
   }
 
+  async remove(runId: bigint): Promise<void> {
+    await this.prisma.testRun.delete({ where: { id: runId } });
+  }
+
   /** Newest first here; the service reverses so charts plot left to right. */
   findTrend(projectId: bigint, query: TrendQueryDto): Promise<TestRun[]> {
     return this.prisma.testRun.findMany({

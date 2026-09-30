@@ -15,6 +15,8 @@ export type ApiSpecRow = Prisma.ApiSpecGetPayload<typeof withUploader>;
 const summaryFields = {
   id: true,
   projectId: true,
+  serviceKey: true,
+  active: true,
   version: true,
   title: true,
   specVersion: true,
@@ -31,6 +33,8 @@ export type ApiSpecSummaryRow = Prisma.ApiSpecGetPayload<{ select: typeof summar
 
 export interface NewApiSpec {
   projectId: bigint;
+  serviceKey: string;
+  active: boolean;
   version: string;
   title: string;
   specVersion: string;
@@ -64,20 +68,49 @@ export class ApiSpecsRepository {
     });
   }
 
-  findByChecksum(projectId: bigint, checksum: string): Promise<ApiSpecSummaryRow | null> {
+  findByChecksum(
+    projectId: bigint,
+    serviceKey: string,
+    checksum: string,
+  ): Promise<ApiSpecSummaryRow | null> {
     return this.prisma.apiSpec.findUnique({
-      where: { projectId_checksum: { projectId, checksum } },
+      where: { projectId_serviceKey_checksum: { projectId, serviceKey, checksum } },
       select: summaryFields,
     });
   }
 
-  /** The newest snapshot, optionally ignoring one — used to find what preceded it. */
-  findLatest(projectId: bigint, excludeId?: bigint): Promise<ApiSpecSummaryRow | null> {
+  /** The newest snapshot of one service, optionally ignoring one. */
+  findLatest(
+    projectId: bigint,
+    serviceKey: string,
+    excludeId?: bigint,
+  ): Promise<ApiSpecSummaryRow | null> {
     return this.prisma.apiSpec.findFirst({
-      where: { projectId, ...(excludeId === undefined ? {} : { id: { lt: excludeId } }) },
+      where: {
+        projectId,
+        serviceKey,
+        ...(excludeId === undefined ? {} : { id: { lt: excludeId } }),
+      },
       select: summaryFields,
       orderBy: { id: 'desc' },
     });
+  }
+
+  async setActive(
+    projectId: bigint,
+    id: bigint,
+    active: boolean,
+  ): Promise<ApiSpecSummaryRow | null> {
+    const updated = await this.prisma.apiSpec.updateMany({
+      where: { id, projectId },
+      data: { active },
+    });
+    return updated.count === 0 ? null : this.findById(projectId, id);
+  }
+
+  async delete(projectId: bigint, id: bigint): Promise<boolean> {
+    const deleted = await this.prisma.apiSpec.deleteMany({ where: { id, projectId } });
+    return deleted.count > 0;
   }
 
   /** The uploaded bytes, for the download endpoint. */

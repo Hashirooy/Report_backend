@@ -247,9 +247,13 @@ model TestResult {
   description String?
 
   /// Extracted from statusDetails so top-failure queries never scan raw_result.
-  statusMessage String? @map("status_message")
-  statusTrace   String? @map("status_trace")
-  errorGroupId  BigInt? @map("error_group_id")
+  statusMessage     String? @map("status_message")
+  statusTrace       String? @map("status_trace")
+  /// Full matcher values used by Allure's difference view. Unlike message,
+  /// object values are not abbreviated to `{ … }`.
+  assertionActual   String? @map("assertion_actual")
+  assertionExpected String? @map("assertion_expected")
+  errorGroupId      BigInt? @map("error_group_id")
 
   startMs    BigInt? @map("start_ms")
   stopMs     BigInt? @map("stop_ms")
@@ -602,6 +606,13 @@ model ApiSpec {
   id        BigInt @id @default(autoincrement())
   projectId BigInt @map("project_id")
 
+  /// Stable identity of one API/service inside a project. Each service has an
+  /// independent snapshot history; by default uploads use `info.title`.
+  serviceKey String @map("service_key") @db.VarChar(200)
+  /// Inactive snapshots stay available for history and diffs but are ignored
+  /// when resolving the contract for a test result.
+  active Boolean @default(true)
+
   /// `info.version` of the document unless the uploader overrode it.
   version     String @db.VarChar(200)
   /// `info.title`, so a list of snapshots reads as something other than ids.
@@ -631,8 +642,8 @@ model ApiSpec {
   operations ApiOperation[]
 
   /// Uploading an unchanged document returns the existing snapshot.
-  @@unique([projectId, checksum])
-  @@index([projectId, createdAt])
+  @@unique([projectId, serviceKey, checksum])
+  @@index([projectId, serviceKey, active, createdAt])
   @@map("api_specs")
 }
 

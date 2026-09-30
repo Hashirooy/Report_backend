@@ -166,8 +166,14 @@ const pointer = (document: Json, ref: string): Json | null => {
   let current: unknown = document;
   for (const rawSegment of ref.slice(2).split('/')) {
     const segment = rawSegment.replace(/~1/g, '/').replace(/~0/g, '~');
-    if (!isObject(current)) return null;
-    current = current[segment];
+    if (Array.isArray(current)) {
+      if (!/^(0|[1-9]\d*)$/.test(segment)) return null;
+      current = current[Number(segment)];
+    } else if (isObject(current)) {
+      current = current[segment];
+    } else {
+      return null;
+    }
   }
   return isObject(current) ? current : null;
 };

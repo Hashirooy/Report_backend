@@ -9,6 +9,9 @@ import type { ParsedStatus } from '../entities/parsed-run.entity.js';
 export interface AllureStatusDetails {
   message?: string;
   trace?: string;
+  /** Matcher values used by Allure's "Show difference" view. */
+  actual?: unknown;
+  expected?: unknown;
   flaky?: boolean;
   muted?: boolean;
   known?: boolean;

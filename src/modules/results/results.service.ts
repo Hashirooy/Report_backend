@@ -83,6 +83,7 @@ export class ResultsService {
       startedAt: msToIso(row.startMs),
       finishedAt: msToIso(row.stopMs),
       trace: row.statusTrace,
+      assertion: assertionDetails(row.assertionActual, row.assertionExpected, row.rawResult),
       labels,
       parameters: asPairs(row.parameters),
       links: asLinks(row.links),
@@ -144,6 +145,33 @@ const asLinks = (value: unknown) =>
 
 const valueOf = (labels: LabelPair[], name: string): string | null =>
   labels.find((label) => label.name === name)?.value ?? null;
+
+/** Columns are authoritative; rawResult keeps old rows readable before backfill. */
+function assertionDetails(
+  storedActual: string | null,
+  storedExpected: string | null,
+  rawResult: unknown,
+): { actual: string | null; expected: string | null } | null {
+  const details = isRecord(rawResult) && isRecord(rawResult.statusDetails)
+    ? rawResult.statusDetails
+    : null;
+  const actual = storedActual ?? printable(details?.actual);
+  const expected = storedExpected ?? printable(details?.expected);
+  return actual === null && expected === null ? null : { actual, expected };
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+function printable(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return null;
+  }
+}
 
 const toAttachment = (row: AttachmentRow): Attachment => ({
   id: idOf(row.id),

@@ -18,6 +18,8 @@ import { OpenApiParserService } from './openapi-parser.service.js';
 export interface SpecUpload {
   raw: string;
   fileName: string;
+  /** Stable API identity within the project; defaults to the document title. */
+  serviceKey?: string;
   /** Overrides `info.version`, for a document whose version never moves. */
   version?: string;
 }
@@ -47,7 +49,8 @@ export class ApiSpecsService {
   }
 
   /**
-   * Stores a snapshot and reports what it changed.
+   * Stores a snapshot and reports what changed from the preceding snapshot of
+   * the same service.
    *
    * Uploading a document already stored is not an error: it is what happens
    * when someone presses the button twice, or when the API genuinely has not
@@ -59,18 +62,26 @@ export class ApiSpecsService {
     actor: UserPrincipal | undefined,
   ): Promise<UploadedApiSpec> {
     const parsed = this.parser.parse(upload.raw);
+    const serviceKey = upload.serviceKey?.trim() || parsed.title.trim().slice(0, 200);
 
-    const existing = await this.specs.findByChecksum(projectId, parsed.checksum);
-    if (existing) return { spec: toListItem(existing), unchanged: true, diff: null };
+    const existing = await this.specs.findByChecksum(projectId, serviceKey, parsed.checksum);
+    if (existing) {
+      const current = existing.active
+        ? existing
+        : await this.specs.setActive(projectId, existing.id, true);
+      return { spec: toListItem(current ?? existing), unchanged: true, diff: null };
+    }
 
     if (parsed.operations.length === 0) {
       throw new BadRequestException('the document declares no operations under "paths"');
     }
 
-    const previous = await this.specs.findLatest(projectId);
+    const previous = await this.specs.findLatest(projectId, serviceKey);
     const created = await this.specs.create(
       {
         projectId,
+        serviceKey,
+        active: true,
         version: upload.version?.slice(0, 200) ?? parsed.version,
         title: parsed.title,
         specVersion: parsed.specVersion,
@@ -110,13 +121,31 @@ export class ApiSpecsService {
     const to = await this.requireSpec(projectId, specId);
     const from =
       againstId === undefined
-        ? await this.specs.findLatest(projectId, to.id)
+        ? await this.specs.findLatest(projectId, to.serviceKey, to.id)
         : await this.requireSpec(projectId, againstId);
 
     if (!from) {
-      throw new BadRequestException(`api spec ${specId} is the first snapshot of this project`);
+      throw new BadRequestException(
+        `api spec ${specId} is the first snapshot of service "${to.serviceKey}"`,
+      );
+    }
+    if (from.serviceKey !== to.serviceKey) {
+      throw new BadRequestException(
+        `cannot compare service "${to.serviceKey}" with service "${from.serviceKey}"`,
+      );
     }
     return this.diffRows(from, to);
+  }
+
+  async setActive(projectId: bigint, specId: bigint, active: boolean): Promise<ApiSpecListItem> {
+    const updated = await this.specs.setActive(projectId, specId, active);
+    if (!updated) throw new NotFoundException(`api spec ${specId} not found`);
+    return toListItem(updated);
+  }
+
+  async delete(projectId: bigint, specId: bigint): Promise<void> {
+    const deleted = await this.specs.delete(projectId, specId);
+    if (!deleted) throw new NotFoundException(`api spec ${specId} not found`);
   }
 
   private async diffRows(from: ApiSpecSummaryRow, to: ApiSpecSummaryRow): Promise<ApiSpecDiff> {
@@ -178,6 +207,8 @@ const toOperation = (row: ApiOperationRow): ApiOperation => ({
 
 const toListItem = (row: ApiSpecSummaryRow): ApiSpecListItem => ({
   id: idOf(row.id),
+  serviceKey: row.serviceKey,
+  active: row.active,
   version: row.version,
   title: row.title,
   specVersion: row.specVersion,
@@ -191,6 +222,7 @@ const toListItem = (row: ApiSpecSummaryRow): ApiSpecListItem => ({
 
 const toRef = (row: ApiSpecSummaryRow): ApiSpecRef => ({
   id: idOf(row.id),
+  serviceKey: row.serviceKey,
   version: row.version,
   createdAt: row.createdAt.toISOString(),
 });

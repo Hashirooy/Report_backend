@@ -1,6 +1,7 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Controller, Delete, Get, HttpCode, Param, Query } from '@nestjs/common';
 import type { RunDetail, TrendPoint } from '../../contracts/index.js';
 
+import { RequireProjectRole } from '../../common/decorators/auth.decorators.js';
 import { ListRunsQueryDto, TrendQueryDto } from './dto/list-runs.query.dto.js';
 import { RunsService, type PaginatedRuns } from './runs.service.js';
 
@@ -31,5 +32,16 @@ export class RunsController {
     @Param('runId') runId: string,
   ): Promise<RunDetail> {
     return this.runs.findOne(projectId, runId);
+  }
+
+  /** `runId` accepts the run number shown in the UI or a numeric id. */
+  @Delete('runs/:runId')
+  @HttpCode(204)
+  @RequireProjectRole('maintainer')
+  remove(
+    @Param('projectId') projectId: string,
+    @Param('runId') runId: string,
+  ): Promise<void> {
+    return this.runs.remove(projectId, runId);
   }
 }

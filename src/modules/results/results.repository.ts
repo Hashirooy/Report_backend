@@ -81,16 +81,27 @@ export class ResultsRepository {
   }
 
   private whereOf(runId: bigint, query: ListResultsQueryDto): Prisma.TestResultWhereInput {
+    const name = query.name ?? query.q;
+
     return {
       runId,
       ...(query.includeRetries ? {} : { isRetry: false }),
       ...(query.status ? { status: query.status } : {}),
       ...(query.errorGroupId ? { errorGroupId: BigInt(query.errorGroupId) } : {}),
-      ...(query.suite || query.q
+      ...(query.suite || name
         ? {
             testCase: {
-              ...(query.suite ? { suite: query.suite } : {}),
-              ...(query.q ? { name: { contains: query.q, mode: 'insensitive' } } : {}),
+              ...(query.suite
+                ? { suite: { contains: query.suite, mode: 'insensitive' as const } }
+                : {}),
+              ...(name
+                ? {
+                    OR: [
+                      { name: { contains: name, mode: 'insensitive' as const } },
+                      { fullName: { contains: name, mode: 'insensitive' as const } },
+                    ],
+                  }
+                : {}),
             },
           }
         : {}),

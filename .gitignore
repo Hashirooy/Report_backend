@@ -2,6 +2,7 @@ node_modules/
 dist/
 .env
 .env.local
+.postgres/
 *.tsbuildinfo
 uploads/
 .DS_Store

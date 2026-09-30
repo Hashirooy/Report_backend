@@ -38,6 +38,12 @@ export class RunsService {
     return this.toDetail(run, project);
   }
 
+  async remove(projectRef: string, runRef: string): Promise<void> {
+    const project = await this.projects.requireByRef(projectRef);
+    const run = await this.requireRun(project, runRef);
+    await this.runs.remove(run.id);
+  }
+
   async trend(projectRef: string, query: TrendQueryDto): Promise<TrendPoint[]> {
     const project = await this.projects.requireByRef(projectRef);
     const rows = await this.runs.findTrend(project.id, query);

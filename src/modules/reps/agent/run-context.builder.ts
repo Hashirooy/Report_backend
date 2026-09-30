@@ -4,18 +4,13 @@ import type { RepsJob } from '@prisma/client';
 import { idOf, isoOf, passRate } from '../../../common/utils/serialization.js';
 import { PrismaService } from '../../../prisma/prisma.service.js';
 import { ApiContractResolver } from './api-contract.resolver.js';
+import { buildBugReportEvidence } from './bug-report-evidence.js';
 
 /** Failures written into the context file. Enough to reason from, not a dump. */
 const MAX_FAILURES = 60;
 /** Traces are the bulk of the payload and the tail is rarely the useful part. */
 const TRACE_CHARS = 2_000;
 
-/**
- * A single-test job has one trace to explain instead of sixty, so it can afford
- * a far more generous slice of it — the assertion is at the top, but the frame
- * that names the real cause is often well down the stack.
- */
-const FOCUS_TRACE_CHARS = 12_000;
 /** Steps of the focused execution. A test with more than this is pathological. */
 const MAX_STEPS = 300;
 /** Prior executions of the same test, newest first — enough to see a pattern. */
@@ -27,8 +22,8 @@ const MAX_HISTORY = 25;
  * must not crowd out the trace and the history, so each gets a slice and the
  * whole set gets a ceiling.
  */
-const ATTACHMENT_CHARS = 8_000;
-const ATTACHMENT_TOTAL_CHARS = 40_000;
+const ATTACHMENT_CHARS = 300_000;
+const ATTACHMENT_TOTAL_CHARS = 1_200_000;
 
 export interface JobContext {
   /** The source data, serialized into the prompt. Null when there is none. */
@@ -197,6 +192,7 @@ export class RunContextBuilder {
           content: true,
           truncated: true,
         },
+        orderBy: { id: 'asc' },
       }),
       /** Same test across runs, newest first — the flakiness question. */
       this.prisma.testResult.findMany({
@@ -237,6 +233,19 @@ export class RunContextBuilder {
       testName: result.testCase.fullName ?? result.testCase.name,
       attachments,
     });
+    const contextAttachments = budgeted(attachments);
+    const assertion = assertionDetails(
+      result.assertionActual,
+      result.assertionExpected,
+      result.rawResult,
+    );
+    const bugReportEvidence = buildBugReportEvidence({
+      environment: result.run.environment,
+      testName: result.testCase.fullName ?? result.testCase.name,
+      assertion,
+      attachments,
+      contract: contract.json,
+    });
 
     const context = {
       project: {
@@ -276,10 +285,20 @@ export class RunContextBuilder {
         isRetry: result.isRetry,
         attempt: result.attempt,
         message: result.statusMessage,
-        trace: truncate(result.statusTrace, FOCUS_TRACE_CHARS),
+        // This is the one execution the report is about. Unlike run-wide
+        // summaries, its error must reach the writer without a second layer of
+        // truncation after Allure and the database have preserved it.
+        trace: result.statusTrace,
         labels: result.labels,
         parameters: result.parameters,
         links: result.links,
+        /**
+         * Allure's matcher integration keeps the useful, unabridged schema
+         * error here while `statusDetails.message` may replace it with an
+         * ellipsis. Expose it explicitly so the report does not ask the user
+         * for a field name that is already present in the parsed result.
+         */
+        assertion,
       },
       errorGroup: result.errorGroup
         ? {
@@ -302,8 +321,8 @@ export class RunContextBuilder {
         name: step.name,
         status: step.status,
         durationMs: step.durationMs,
-        message: truncate(step.message, 1_000),
-        trace: truncate(step.trace, TRACE_CHARS),
+        message: step.message,
+        trace: step.trace,
         parameters: step.parameters,
         attachmentsCount: step.attachmentsCount,
       })),
@@ -312,13 +331,16 @@ export class RunContextBuilder {
        * `content` means the bytes are binary, missing or over the cap, and
        * nothing about them may be asserted.
        */
-      attachments: budgeted(attachments).map((file) => ({
+      attachments: contextAttachments.map((file) => ({
         id: idOf(file.id),
         stepId: file.stepId === null ? null : idOf(file.stepId),
         name: file.name,
         type: file.type,
         sizeBytes: file.sizeBytes,
-        contentAvailable: file.content !== null,
+        contentAvailable: attachmentContentAvailable(file),
+        /** A zero-byte source exists, but contains no request/response evidence. */
+        empty: file.sizeBytes === 0,
+        unavailableReason: attachmentUnavailableReason(file),
         /** True when the body below is only the head of a longer one. */
         truncated: file.truncated || file.dropped,
         content: file.content,
@@ -350,6 +372,12 @@ export class RunContextBuilder {
        * means there is no contract to cite.
        */
       contract: contract.json,
+      /**
+       * Deterministically joins the matching operation, exchange and assertion.
+       * In particular, exactContainerValue is one complete value from one
+       * response path, so the writer never has to splice a large array itself.
+       */
+      bugReportEvidence,
     };
 
     const priorFailures = history.filter(
@@ -362,7 +390,7 @@ export class RunContextBuilder {
       `Status ${result.status} in run #${result.run.runNumber} on ${result.run.branch}` +
         (result.run.environment ? ` (${result.run.environment})` : ''),
       `${steps.length} step(s), ${attachments.length} attachment(s) listed, ` +
-        `${attachments.filter((file) => file.content !== null).length} with their body included` +
+        `${contextAttachments.filter(attachmentContentAvailable).length} with their body included` +
         ' (an attachment whose contentAvailable is false was not read — do not' +
         ' claim to know what it contained)',
       sameGroup.length
@@ -410,7 +438,54 @@ function budgeted(rows: AttachmentRow[]): (AttachmentRow & { dropped: boolean })
   });
 }
 
+function attachmentContentAvailable(file: AttachmentRow & { dropped?: boolean }): boolean {
+  return file.content !== null && file.sizeBytes !== 0 && !file.dropped;
+}
+
+function attachmentUnavailableReason(
+  file: AttachmentRow & { dropped?: boolean },
+): 'empty_file' | 'not_stored' | 'context_budget' | null {
+  if (file.sizeBytes === 0) return 'empty_file';
+  if (file.dropped) return 'context_budget';
+  if (file.content === null) return 'not_stored';
+  return null;
+}
+
 function truncate(text: string | null, max: number): string | null {
   if (!text) return text;
   return text.length > max ? `${text.slice(0, max)}\n… truncated` : text;
+}
+
+/** Extracts matcher details retained inside the failed result's raw Allure JSON. */
+function assertionDetails(
+  storedActual: string | null,
+  storedExpected: string | null,
+  raw: unknown,
+): { actual: string | null; expected: string | null } | null {
+  const rawDetails = isRecord(raw) ? raw.statusDetails : null;
+  const details = isRecord(rawDetails) ? rawDetails : null;
+
+  const actual = storedActual ?? printable(details?.actual);
+  const rawExpected = storedExpected ?? printable(details?.expected);
+  // allure-vitest writes the matcher sentinel as the string "undefined" for
+  // not.toThrow(); it is not an expected API value or response contract.
+  const expected = rawExpected === 'undefined' ? null : rawExpected;
+  if (actual === null && expected === null) return null;
+  return {
+    actual,
+    expected,
+  };
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+function printable(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return null;
+  }
 }

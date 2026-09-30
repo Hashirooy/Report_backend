@@ -109,6 +109,8 @@ export class AllureParserService {
       status,
       statusMessage: message,
       statusTrace: trace,
+      assertionActual: printable(raw.statusDetails?.actual),
+      assertionExpected: printable(raw.statusDetails?.expected),
       startMs: typeof raw.start === 'number' ? raw.start : null,
       stopMs: typeof raw.stop === 'number' ? raw.stop : null,
       durationMs: durationOf(raw.start, raw.stop),
@@ -159,6 +161,17 @@ const asString = (value: unknown): string | null => {
   if (value === null || value === undefined) return null;
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return null;
+  }
+};
+
+/** Preserves Allure matcher values as readable text, including object-shaped values. */
+const printable = (value: unknown): string | null => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') return value;
   try {
     return JSON.stringify(value);
   } catch {

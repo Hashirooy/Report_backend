@@ -344,6 +344,8 @@ export class IngestRepository {
         description: result.description,
         statusMessage: result.statusMessage,
         statusTrace: result.statusTrace,
+        assertionActual: result.assertionActual,
+        assertionExpected: result.assertionExpected,
         errorGroupId: print ? (errorGroupIds.get(print.fingerprint) ?? null) : null,
         startMs: result.startMs === null ? null : BigInt(result.startMs),
         stopMs: result.stopMs === null ? null : BigInt(result.stopMs),

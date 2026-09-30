@@ -1,10 +1,11 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import type { Project as ProjectRow, ProjectMemberRole } from '@prisma/client';
-import type { Project, ProjectListItem } from '../../contracts/index.js';
+import type { CreatedProject, Project, ProjectListItem } from '../../contracts/index.js';
 
 import type { Principal, UserPrincipal } from '../../common/auth/principal.js';
 import { idOf, isoOf, passRate } from '../../common/utils/serialization.js';
 import { ProjectAccessService } from './project-access.service.js';
+import { issueProjectToken } from './project-tokens.service.js';
 import type { CreateProjectDto } from './dto/create-project.dto.js';
 import type { UpdateProjectDto } from './dto/update-project.dto.js';
 import { ProjectsRepository } from './projects.repository.js';
@@ -54,13 +55,17 @@ export class ProjectsService {
   }
 
   /** Any signed-in user may create a project, and owns it as its maintainer. */
-  async create(dto: CreateProjectDto, actor: UserPrincipal): Promise<Project> {
+  async create(dto: CreateProjectDto, actor: UserPrincipal): Promise<CreatedProject> {
     const existing = await this.projects.findByRef(dto.slug);
     if (existing) {
       throw new ConflictException(`project "${dto.slug}" already exists`);
     }
-    const project = await this.projects.create(dto, actor.userId);
-    return this.toDto(project, [], actor.role === 'admin' ? null : 'maintainer');
+    const issued = issueProjectToken();
+    const project = await this.projects.create(dto, actor.userId, issued);
+    return {
+      ...this.toDto(project, [], actor.role === 'admin' ? null : 'maintainer'),
+      ingestToken: issued.token,
+    };
   }
 
   async update(actor: UserPrincipal, ref: string, dto: UpdateProjectDto): Promise<Project> {

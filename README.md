@@ -136,6 +136,7 @@ GET  /api/projects/:projectId/dashboard            one call for the project scre
 GET  /api/projects/:projectId/runs
 GET  /api/projects/:projectId/trend
 GET  /api/projects/:projectId/runs/:runId          run number or numeric id
+DELETE /api/projects/:projectId/runs/:runId        maintainer only
 GET  /api/projects/:projectId/runs/:runId/results
 GET  /api/projects/:projectId/runs/:runId/results/:resultId
 GET  /api/projects/:projectId/errors
@@ -145,10 +146,176 @@ GET  /api/projects/:projectId/test-cases/:testCaseId/history
 POST /api/ingest                                   X-API-Token, multipart
 ```
 
+Run results can be filtered by case-insensitive substrings with `suite` and
+`name`, for example `?suite=contract&name=get_entity`. The older `q` parameter
+remains an alias for `name`.
+
+`POST /api/projects` creates an initial project-scoped CI token and returns it
+once as `ingestToken`. Store it in the project's CI secret variables and send it
+in the `X-API-Token` header. Later project reads never return the secret.
+
+## Отправка баг-репорта через интеграцию проекта
+
+Готовый документ Reps отправляется во внешнюю систему через единственную
+интеграцию проекта:
+
+```http
+POST /api/reps/jobs/:jobId/exports
+Content-Type: application/json
+```
+
+Ручка не создаёт баг-репорт и не ожидает завершения Reps job. Перед вызовом:
+
+1. job должна быть привязана к проекту;
+2. job должна уже сформировать хотя бы один artifact с документом;
+3. у проекта должна быть настроена и включена интеграция через
+   `PUT /api/projects/:projectId/integration`;
+4. вызывающий пользователь должен иметь роль `maintainer` в проекте;
+5. если шаблон использует `{{secret}}`, у интеграции должен быть сохранён secret.
+
+### Выбор документа
+
+Чтобы отправить конкретный artifact, передайте его числовой id:
+
+```json
+{
+  "artifactId": "456"
+}
+```
+
+`artifactId` должен принадлежать job из URL. Artifact другой job считается не
+найденным. Если поле не передано, выбирается последний artifact этой job по
+`createdAt`, затем по `id`:
+
+```json
+{}
+```
+
+Перед отправкой Markdown разбирается на поля bug report. Они вместе с данными
+проекта, запуска, теста, job и пользователя подставляются в шаблон интеграции.
+Получившийся HTTP-запрос выполняется синхронно в рамках вызова `POST /exports`.
+
+Пример с curl:
+
+```bash
+curl -X POST \
+  "https://reports.example.com/api/reps/jobs/123/exports" \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"artifactId":"456"}'
+```
+
+### Успешный ответ
+
+Ручка возвращает `201 Created` и запись о попытке отправки:
+
+```json
+{
+  "id": "84",
+  "jobId": "123",
+  "artifactId": "456",
+  "integrationId": "7",
+  "integrationName": "Jira",
+  "status": "succeeded",
+  "requestMethod": "POST",
+  "requestUrl": "https://jira.example.com/rest/api/2/issue",
+  "responseStatus": 201,
+  "externalKey": "BUG-42",
+  "externalUrl": "https://jira.example.com/browse/BUG-42",
+  "error": null,
+  "createdAt": "2026-09-24T08:00:00.000Z",
+  "finishedAt": "2026-09-24T08:00:01.000Z"
+}
+```
+
+`externalKey` и `externalUrl` заполняются по настройкам `template.response`.
+Если внешняя система приняла запрос, но её ответ невозможно разобрать, export
+остаётся `succeeded`, а пояснение записывается в `error`.
+
+### Ошибка внешней системы
+
+HTTP-ошибка Jira, YouTrack или другого приёмника является результатом попытки,
+а не ошибкой REST API отчётов. Поэтому ручка также возвращает `201`, но в теле
+будет `status: "failed"`:
+
+```json
+{
+  "id": "85",
+  "jobId": "123",
+  "artifactId": "456",
+  "integrationId": "7",
+  "integrationName": "Jira",
+  "status": "failed",
+  "requestMethod": "POST",
+  "requestUrl": "https://jira.example.com/rest/api/2/issue",
+  "responseStatus": 400,
+  "externalKey": null,
+  "externalUrl": null,
+  "error": "the target answered HTTP 400",
+  "createdAt": "2026-09-24T08:02:00.000Z",
+  "finishedAt": "2026-09-24T08:02:01.000Z"
+}
+```
+
+Сетевая ошибка и таймаут также сохраняются как `status: "failed"`. Необходимо
+проверять одновременно HTTP-статус нашей ручки и поле `status` в её ответе.
+
+### Защита от повторной отправки и `force`
+
+Без `force` новый запрос блокируется с `409 Conflict`, если эта job уже успешно
+отправлялась через текущую интеграцию либо отправляется прямо сейчас:
+
+```json
+{
+  "artifactId": "456",
+  "force": true
+}
+```
+
+`force: true` разрешает новую попытку после успешной отправки. Он не обходит
+активную попытку со статусом `pending`, чтобы два одновременных запроса не
+создали два одинаковых issue. Предыдущая неуспешная попытка со статусом
+`failed` повторную отправку не блокирует, поэтому после неё `force` не нужен.
+
+Если процесс завершился во время отправки, старая `pending`-запись после
+таймаута помечается как `failed` и перестаёт блокировать новые попытки.
+
+### Предпросмотр без отправки
+
+Перед реальной отправкой можно получить итоговый метод, URL, заголовки, JSON и
+значения переменных:
+
+```http
+POST /api/reps/jobs/:jobId/exports/preview
+Content-Type: application/json
+
+{
+  "artifactId": "456"
+}
+```
+
+Preview возвращает `200 OK`, не создаёт `IssueExport` и не обращается к внешней
+системе. Секрет в заголовках всегда заменяется на `***`.
+
+### История отправок
+
+Все попытки для job, включая неуспешные, доступны по ручке:
+
+```http
+GET /api/reps/jobs/:jobId/exports
+```
+
+Основные ошибки самой ручки:
+
+- `400 Bad Request` — некорректный id, шаблон или запрещённый адрес назначения;
+- `404 Not Found` — job, artifact или интеграция не найдены либо недоступны пользователю;
+- `409 Conflict` — документ ещё не создан, интеграция выключена, отсутствует
+  необходимый secret или отправка заблокирована существующей попыткой.
+
 ## Running it
 
 ```bash
-cp .env.example .env            # set DATABASE_URL and INGEST_TOKEN
+cp .env.example .env            # set DATABASE_URL
 npm install
 npx prisma migrate dev --name init
 psql "$DATABASE_URL" -f prisma/sql/002_partial_indexes.sql

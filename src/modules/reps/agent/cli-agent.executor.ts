@@ -19,10 +19,17 @@ const STDERR_CAP = 8_000;
 /** Assistant text is logged as progress, not stored in full. */
 export const EVENT_TEXT_CAP = 1_000;
 
+interface CliCommand {
+  file: string;
+  prefixArgs: string[];
+}
+
 /** What one line of a CLI's stream tells us. Every field is optional. */
 export interface StreamUpdate {
   /** A session id carried by this message, if it names one. */
   sessionId?: string;
+  /** Latest agent message; some CLIs signal completion in a later event. */
+  text?: string;
   /**
    * Present only on the message that ends the run. `durationMs` may be left out
    * when the CLI does not report one, and wall clock is used instead.
@@ -33,6 +40,8 @@ export interface StreamUpdate {
     durationMs?: number | null;
     numTurns: number | null;
   };
+  /** A terminal failure reported by a CLI even if it exits with code zero. */
+  failure?: string;
   /** A line for the job's event log, or nothing if the message is noise. */
   event?: AgentProgressEvent;
 }
@@ -52,7 +61,7 @@ export interface StreamUpdate {
  */
 export abstract class CliAgentExecutor extends AgentExecutor {
   protected readonly logger = new Logger(this.constructor.name);
-  private resolvedCli: string | null = null;
+  private resolvedCli: CliCommand | null = null;
 
   constructor(protected readonly config: ConfigService) {
     super();
@@ -70,20 +79,40 @@ export abstract class CliAgentExecutor extends AgentExecutor {
    * up. Overridden by a CLI that needs something placed in its working
    * directory.
    */
-  protected workingDirectory(): string {
+  protected workingDirectory(_request: AgentRunRequest): string {
     return tmpdir();
   }
 
-  override async run(request: AgentRunRequest): Promise<AgentRunResult> {
-    const started = Date.now();
+  /** Called after the child exits, including failed starts and cancellation. */
+  protected cleanupWorkingDirectory(_directory: string): void {}
 
-    const child = spawn(this.executable(), this.argsFor(request), {
-      cwd: this.workingDirectory(),
+  /** The environment the CLI receives. Providers may remove app secrets. */
+  protected childEnvironment(): NodeJS.ProcessEnv {
+    return process.env;
+  }
+
+  override async run(request: AgentRunRequest): Promise<AgentRunResult> {
+    const directory = this.workingDirectory(request);
+    try {
+      return await this.runInDirectory(request, directory);
+    } finally {
+      this.cleanupWorkingDirectory(directory);
+    }
+  }
+
+  private async runInDirectory(
+    request: AgentRunRequest,
+    directory: string,
+  ): Promise<AgentRunResult> {
+    const started = Date.now();
+    const command = this.executable();
+    const child = spawn(command.file, [...command.prefixArgs, ...this.argsFor(request)], {
+      cwd: directory,
       // No shell: the prompt never reaches a command line, but the CLI path and
       // model come from configuration and should not be word-split either.
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: process.env,
+      env: this.childEnvironment(),
       windowsHide: true,
     });
 
@@ -92,9 +121,15 @@ export abstract class CliAgentExecutor extends AgentExecutor {
     // closure assigns to.
     const state: {
       sessionId: string | null;
+      latestText: string | null;
       result: AgentRunResult | null;
       failure: AgentProcessError | null;
-    } = { sessionId: request.resumeSessionId ?? null, result: null, failure: null };
+    } = {
+      sessionId: request.resumeSessionId ?? null,
+      latestText: null,
+      result: null,
+      failure: null,
+    };
 
     let stderr = '';
     let stdoutBytes = 0;
@@ -118,15 +153,20 @@ export abstract class CliAgentExecutor extends AgentExecutor {
       // Before the result, so a CLI that names the session on the same message
       // that ends the run still has it recorded against that run.
       if (update.sessionId) state.sessionId = update.sessionId;
+      if (update.text !== undefined) state.latestText = update.text;
 
       if (update.result) {
         state.result = {
-          payload: update.result.payload,
+          payload: update.result.payload ?? state.latestText,
           sessionId: state.sessionId,
           costUsd: update.result.costUsd,
           durationMs: update.result.durationMs ?? Date.now() - started,
           numTurns: update.result.numTurns,
         };
+      }
+
+      if (update.failure) {
+        state.failure ??= new AgentProcessError('exit', update.failure, state.sessionId);
       }
 
       if (update.event) request.onEvent(update.event);
@@ -225,14 +265,17 @@ export abstract class CliAgentExecutor extends AgentExecutor {
    * works in a terminal. Resolving it here keeps `shell: false`, so nothing on
    * the command line is ever handed to a shell to re-parse.
    */
-  private executable(): string {
+  private executable(): CliCommand {
     if (this.resolvedCli) return this.resolvedCli;
 
     const configured = this.config.getOrThrow<string>('reps.cli');
-    this.resolvedCli = resolveOnPath(configured) ?? configured;
+    this.resolvedCli = resolveOnPath(configured) ??
+      (process.platform === 'win32' && /\.(cmd|bat)$/i.test(configured)
+        ? targetOfWindowsShim(configured)
+        : null) ?? { file: configured, prefixArgs: [] };
 
-    if (this.resolvedCli !== configured) {
-      this.logger.log(`agent CLI "${configured}" resolved to ${this.resolvedCli}`);
+    if (this.resolvedCli.file !== configured || this.resolvedCli.prefixArgs.length) {
+      this.logger.log(`agent CLI "${configured}" resolved to ${this.resolvedCli.file}`);
     }
     return this.resolvedCli;
   }
@@ -245,9 +288,9 @@ export abstract class CliAgentExecutor extends AgentExecutor {
  *
  * Extensions are tried real-executable-first because Node refuses to run a
  * `.cmd` or `.bat` without a shell, and a shell would have to re-parse our
- * arguments. When only a shim is on PATH, the binary it wraps is used instead.
+ * arguments. When only a shim is on PATH, its target is launched directly.
  */
-function resolveOnPath(command: string): string | null {
+function resolveOnPath(command: string): CliCommand | null {
   if (command.includes('/') || command.includes('\\')) return null;
 
   const directories = (process.env.PATH ?? '').split(delimiter).filter(Boolean);
@@ -258,20 +301,18 @@ function resolveOnPath(command: string): string | null {
       const candidate = join(directory, command + extension);
       if (!existsSync(candidate)) continue;
       return extension === '.cmd' || extension === '.bat'
-        ? (targetOfWindowsShim(candidate) ?? candidate)
-        : candidate;
+        ? (targetOfWindowsShim(candidate) ?? { file: candidate, prefixArgs: [] })
+        : { file: candidate, prefixArgs: [] };
     }
   }
   return null;
 }
 
 /**
- * Pulls the executable out of an npm-generated `.cmd` shim, which calls it as
- * `"%dp0%\path\to\thing.exe" %*`. Returns null for anything else — including a
- * shim that runs `node script.js`, where the script argument would have to come
- * along too and spawn's plain EINVAL is the more honest failure.
+ * Extracts a native executable or Node entrypoint from an npm `.cmd` shim.
+ * Node shims need the script as a prefix argument; the shell stays off.
  */
-function targetOfWindowsShim(shimPath: string): string | null {
+export function targetOfWindowsShim(shimPath: string): CliCommand | null {
   let text: string;
   try {
     text = readFileSync(shimPath, 'utf8');
@@ -280,9 +321,13 @@ function targetOfWindowsShim(shimPath: string): string | null {
   }
 
   for (const match of text.matchAll(/"%dp0%\\+([^"]+\.exe)"/gi)) {
-    const target = join(dirname(shimPath), match[1]);
-    if (basename(target).toLowerCase() === 'node.exe') return null;
-    if (existsSync(target)) return target;
+    const target = join(dirname(shimPath), ...match[1].split(/\\+/));
+    if (basename(target).toLowerCase() === 'node.exe') continue;
+    if (existsSync(target)) return { file: target, prefixArgs: [] };
+  }
+  for (const match of text.matchAll(/"%dp0%\\+([^"]+\.(?:js|cjs|mjs))"/gi)) {
+    const script = join(dirname(shimPath), ...match[1].split(/\\+/));
+    if (existsSync(script)) return { file: process.execPath, prefixArgs: [script] };
   }
   return null;
 }

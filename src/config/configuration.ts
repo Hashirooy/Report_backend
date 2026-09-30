@@ -60,18 +60,15 @@ export interface AppConfig {
     rawResultRetentionDays: number;
   };
   reps: {
+    provider: 'claude' | 'codex';
     /** Agent CLI executable. Resolved on PATH unless an absolute path is given. */
     cli: string;
     model: string;
-    /**
-     * Directory the agent process runs in. It holds `.claude/skills`, and
-     * nothing else — the agent must not see the repository's own CLAUDE.md or
-     * settings. Relative paths resolve against the process working directory.
-     */
+    /** Directory with `.claude/skills`, read by SkillLibrary into the prompt. */
     skillsRoot: string;
     /** Wall clock for one task before the process is killed. */
     taskTimeoutMs: number;
-    /** Hard ceiling on API spend per task, passed to the CLI. 0 disables it. */
+    /** Claude-only spend ceiling per task. 0 disables it. */
     maxBudgetUsd: number;
     /** How often a running task refreshes its heartbeat and checks for cancel. */
     heartbeatMs: number;
@@ -127,8 +124,9 @@ export default (): AppConfig => ({
     rawResultRetentionDays: int(process.env.RAW_RESULT_RETENTION_DAYS, 30),
   },
   reps: {
-    cli: process.env.REPS_CLI ?? 'claude',
-    model: process.env.REPS_MODEL ?? 'claude-sonnet-5',
+    provider: (process.env.REPS_PROVIDER ?? 'claude') as 'claude' | 'codex',
+    cli: process.env.REPS_CLI || (process.env.REPS_PROVIDER === 'codex' ? 'codex' : 'claude'),
+    model: process.env.REPS_MODEL || (process.env.REPS_PROVIDER === 'codex' ? '' : 'claude-sonnet-5'),
     skillsRoot: process.env.REPS_SKILLS_ROOT ?? 'agent-skills',
     taskTimeoutMs: int(process.env.REPS_TASK_TIMEOUT_MS, 15 * 60_000),
     maxBudgetUsd: Number(process.env.REPS_MAX_BUDGET_USD ?? 2) || 0,
@@ -145,6 +143,9 @@ export default (): AppConfig => ({
 export function validateEnv(env: Record<string, unknown>): Record<string, unknown> {
   if (!env.DATABASE_URL) {
     throw new Error('DATABASE_URL is required');
+  }
+  if (env.REPS_PROVIDER !== undefined && env.REPS_PROVIDER !== 'claude' && env.REPS_PROVIDER !== 'codex') {
+    throw new Error('REPS_PROVIDER must be claude or codex');
   }
   if (env.NODE_ENV === 'production') {
     const secret = typeof env.JWT_SECRET === 'string' ? env.JWT_SECRET : '';

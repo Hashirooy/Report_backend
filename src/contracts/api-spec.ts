@@ -3,12 +3,12 @@ import { z } from 'zod';
 import { IdSchema, IsoDateSchema } from './common.js';
 
 /**
- * OpenAPI snapshots — what the service says its API is, uploaded by hand from
- * a Swagger export.
+ * OpenAPI snapshots — what each service in a project says its API is, uploaded
+ * by hand from a Swagger export.
  *
  * A snapshot is immutable. Re-uploading the same document resolves to the
- * snapshot already stored, so "upload the spec" is safe to press twice and the
- * history stays a list of real changes.
+ * snapshot already stored for that service, so "upload the spec" is safe to
+ * press twice and each service history stays a list of real changes.
  */
 
 /** Methods a snapshot indexes. Anything else in `paths` is ignored. */
@@ -39,6 +39,10 @@ export type ApiOperation = z.infer<typeof ApiOperationSchema>;
 
 export const ApiSpecListItemSchema = z.object({
   id: IdSchema,
+  /** Stable identity of this API/service within the project. */
+  serviceKey: z.string().min(1),
+  /** Whether this snapshot participates in automatic contract resolution. */
+  active: z.boolean(),
   /** `info.version`, unless the uploader supplied one. */
   version: z.string(),
   title: z.string(),
@@ -63,6 +67,7 @@ export type ApiSpecDetail = z.infer<typeof ApiSpecDetailSchema>;
 /** Enough to label a side of a diff without fetching the snapshot. */
 export const ApiSpecRefSchema = ApiSpecListItemSchema.pick({
   id: true,
+  serviceKey: true,
   version: true,
   createdAt: true,
 });
@@ -91,8 +96,8 @@ export type ApiSpecDiff = z.infer<typeof ApiSpecDiffSchema>;
 
 /**
  * The upload response. `diff` compares the new snapshot against the one that
- * was newest before it, and is null for a project's first upload — which is
- * also what the uploader most wants to see right after pressing the button.
+ * was newest for the same service before it, and is null for a service's first
+ * upload.
  */
 export const UploadedApiSpecSchema = z.object({
   spec: ApiSpecListItemSchema,

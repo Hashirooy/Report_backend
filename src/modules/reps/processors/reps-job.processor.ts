@@ -35,7 +35,6 @@ const MAX_TASKS_PER_JOB = 12;
 /** What a finished task tells the orchestrator to do next. */
 type Decision =
   | { kind: 'continue' }
-  | { kind: 'park' }
   | { kind: 'retry'; findings: { id: string; message: string }[] }
   | { kind: 'fail'; error: string }
   | { kind: 'cancelled' };
@@ -126,16 +125,6 @@ export class RepsJobProcessor {
       switch (decision.kind) {
         case 'continue':
           break;
-
-        case 'park':
-          await this.repo.updateJob(jobId, { status: 'waiting_for_user' });
-          await this.repo.appendEvent({
-            jobId,
-            taskId: next.id,
-            level: 'info',
-            message: 'waiting for the user to answer',
-          });
-          return;
 
         case 'retry': {
           const attempt = tasks.filter((task) => task.type === 'generate').length + 1;
@@ -393,30 +382,6 @@ export class RepsJobProcessor {
     }
 
     const output: AgentOutput = parsed.data;
-
-    if (output.status === 'needs_input') {
-      if (!output.questions.length) {
-        return {
-          kind: 'retry',
-          findings: [
-            { id: 'CONTRACT', message: 'status was "needs_input" but no question was asked' },
-          ],
-        };
-      }
-      await this.repo.saveQuestions(
-        job.id,
-        task.id,
-        output.questions.map((question) => ({ externalId: question.id, text: question.text })),
-      );
-      await this.repo.finishTask(task.id, {
-        status: 'waiting_for_user',
-        sessionId,
-        output: output as unknown as Prisma.InputJsonValue,
-      });
-      // The task goes back to pending when the answers land, so the plan is
-      // untouched and the same session picks the work back up.
-      return { kind: 'park' };
-    }
 
     const stored = await this.storeDocuments(job, task, output);
     if (stored.rejected.length) {

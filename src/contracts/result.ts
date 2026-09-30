@@ -43,6 +43,13 @@ export const ResultListItemSchema = z.object({
 });
 export type ResultListItem = z.infer<typeof ResultListItemSchema>;
 
+/** Full matcher values behind Allure's abbreviated assertion message. */
+export const AssertionDetailsSchema = z.object({
+  actual: z.string().nullable(),
+  expected: z.string().nullable(),
+});
+export type AssertionDetails = z.infer<typeof AssertionDetailsSchema>;
+
 /**
  * A file the test recorded. Textual bodies (an HTTP request, a response, a log)
  * travel inline; for anything binary or oversized `content` is null and only
@@ -103,6 +110,8 @@ export const ResultDetailSchema = ResultListItemSchema.extend({
   startedAt: IsoDateSchema.nullable(),
   finishedAt: IsoDateSchema.nullable(),
   trace: z.string().nullable(),
+  /** Null for results whose adapter supplied no structured matcher values. */
+  assertion: AssertionDetailsSchema.nullable(),
   labels: z.array(LabelSchema),
   parameters: z.array(ParameterSchema),
   links: z.array(LinkSchema),
@@ -123,8 +132,11 @@ export type ResultDetail = z.infer<typeof ResultDetailSchema>;
 
 export const ResultListQuerySchema = PaginationQuerySchema.extend({
   status: TestStatusSchema.optional(),
+  /** Case-insensitive substring match. */
   suite: z.string().optional(),
-  /** Substring match against name / fullName. */
+  /** Case-insensitive substring match against name / fullName. */
+  name: z.string().max(200).optional(),
+  /** Legacy alias for `name`. */
   q: z.string().max(200).optional(),
   errorGroupId: IdSchema.optional(),
   /** Superseded attempts are hidden unless explicitly asked for. */

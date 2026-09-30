@@ -30,15 +30,15 @@ export class ProjectTokensService {
     name: string,
     createdByUserId: bigint,
   ): Promise<CreatedProjectToken> {
-    const secret = TOKEN_PREFIX + randomBytes(SECRET_BYTES).toString('base64url');
+    const issued = issueProjectToken();
     const row = await this.tokens.create({
       projectId,
       name,
-      tokenHash: hashToken(secret),
-      prefix: secret.slice(0, SHOWN_CHARS),
+      tokenHash: issued.tokenHash,
+      prefix: issued.prefix,
       createdByUserId,
     });
-    return { ...this.toDto(row), token: secret };
+    return { ...this.toDto(row), token: issued.token };
   }
 
   async revoke(projectId: bigint, tokenId: bigint): Promise<void> {
@@ -81,3 +81,9 @@ export class ProjectTokensService {
  */
 const hashToken = (secret: string): string =>
   createHash('sha256').update(secret, 'utf8').digest('hex');
+
+/** Shared by manual token creation and a project's initial CI token. */
+export function issueProjectToken(): { token: string; tokenHash: string; prefix: string } {
+  const token = TOKEN_PREFIX + randomBytes(SECRET_BYTES).toString('base64url');
+  return { token, tokenHash: hashToken(token), prefix: token.slice(0, SHOWN_CHARS) };
+}
