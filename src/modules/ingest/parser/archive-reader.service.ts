@@ -30,9 +30,6 @@ const MAX_TOTAL_BYTES = 512 * 1024 * 1024;
 const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 /** Cap on the total attachment text read out of one archive. */
 const MAX_ATTACHMENT_TOTAL_BYTES = 64 * 1024 * 1024;
-/** Cap on what is stored per body; beyond it the head is kept and flagged. */
-const MAX_ATTACHMENT_CHARS = 200_000;
-
 /**
  * Attachment types worth decoding. Screenshots and videos are the bulk of a
  * typical archive and nothing downstream can read their bytes, so they are
@@ -132,6 +129,7 @@ export class ArchiveReaderService {
     const containers: AllureContainer[] = [];
     let totalBytes = 0;
     let filesRead = 0;
+    let invalidStructuredFiles = 0;
 
     for (const file of directory.files) {
       if (file.type !== 'File') continue;
@@ -141,6 +139,7 @@ export class ArchiveReaderService {
       if (!isResult && !isContainer) continue;
 
       if (file.uncompressedSize > MAX_ENTRY_BYTES) {
+        invalidStructuredFiles++;
         warnings.push(`${file.path}: ${file.uncompressedSize} bytes exceeds the per-file limit`);
         continue;
       }
@@ -155,11 +154,13 @@ export class ArchiveReaderService {
         const buffer = await file.buffer();
         parsed = JSON.parse(buffer.toString('utf8'));
       } catch (error) {
+        invalidStructuredFiles++;
         warnings.push(`${file.path}: ${(error as Error).message}`);
         continue;
       }
 
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        invalidStructuredFiles++;
         warnings.push(`${file.path}: expected a JSON object`);
         continue;
       }
@@ -169,8 +170,16 @@ export class ArchiveReaderService {
       else containers.push(parsed as AllureContainer);
     }
 
+    if (invalidStructuredFiles) {
+      warnings.unshift(
+        `${invalidStructuredFiles} result/container JSON file(s) could not be parsed`,
+      );
+    }
+
     if (!results.length) {
-      throw new Error('archive contains no *-result.json files');
+      throw new Error(
+        'archive contains no *-result.json files; attachment files alone cannot be linked to tests or steps',
+      );
     }
 
     const attachments = await this.readAttachments(
@@ -200,6 +209,7 @@ export class ArchiveReaderService {
     if (!refs.size) return found;
 
     let totalBytes = 0;
+    let empty = 0;
     for (const file of files) {
       if (file.type !== 'File') continue;
 
@@ -207,6 +217,7 @@ export class ArchiveReaderService {
       if (!refs.has(source) || found.has(source)) continue;
 
       const size = file.uncompressedSize;
+      if (size === 0) empty++;
       if (!isTextual(source, refs.get(source) ?? null)) {
         found.set(source, { sizeBytes: size, content: null, truncated: false });
         continue;
@@ -228,8 +239,11 @@ export class ArchiveReaderService {
         const text = buffer.toString('utf8');
         found.set(source, {
           sizeBytes: size,
-          content: text.slice(0, MAX_ATTACHMENT_CHARS),
-          truncated: text.length > MAX_ATTACHMENT_CHARS,
+          // The per-file byte limit above is also the storage limit. Keeping
+          // the complete text here lets consumers decide their own prompt or
+          // response budget without permanently losing the tail at ingest.
+          content: text,
+          truncated: false,
         });
       } catch (error) {
         warnings.push(`${file.path}: ${(error as Error).message}`);
@@ -239,7 +253,12 @@ export class ArchiveReaderService {
 
     const missing = [...refs.keys()].filter((source) => !found.has(source)).length;
     if (missing) {
-      warnings.push(`${missing} attachment(s) are referenced but absent from the archive`);
+      warnings.unshift(`${missing} attachment(s) are referenced but absent from the archive`);
+    }
+    if (empty) {
+      warnings.unshift(
+        `${empty} referenced attachment(s) exist in the archive but are empty (0 bytes)`,
+      );
     }
     return found;
   }

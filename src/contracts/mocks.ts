@@ -206,6 +206,10 @@ export const mockResultDetail: ResultDetail = {
   finishedAt: '2026-08-28T09:35:44.000Z',
   trace:
     'Traceback (most recent call last):\n  File "tests/contract/application.py", line 61, in test_create_application\n    assert_schema(response.json(), schema)\nAssertionError: Response schema mismatch: expected property "applicationId"',
+  assertion: {
+    actual: '{"status":"created"}',
+    expected: '{"applicationId":"<string>","status":"created"}',
+  },
   labels: [
     { name: 'suite', value: 'contract/application' },
     { name: 'severity', value: 'critical' },

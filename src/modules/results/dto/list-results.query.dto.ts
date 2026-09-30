@@ -33,7 +33,13 @@ export class ListResultsQueryDto {
   @MaxLength(500)
   suite?: string;
 
-  /** Substring match against the test name. */
+  /** Case-insensitive substring match against name / fullName. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  name?: string;
+
+  /** Legacy alias for `name`. */
   @IsOptional()
   @IsString()
   @MaxLength(200)

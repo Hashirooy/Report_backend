@@ -41,10 +41,9 @@ export const AgentFindingSchema = z.object({
  *
  * - `generated` — a generator finished a document.
  * - `approved` / `rejected` — a reviewer's verdict; `rejected` must carry findings.
- * - `needs_input` — the agent cannot continue without answers; must carry questions.
  */
 export const AgentOutputSchema = z.object({
-  status: z.enum(['generated', 'approved', 'rejected', 'needs_input']),
+  status: z.enum(['generated', 'approved', 'rejected']),
   documents: z.array(AgentDocumentSchema).max(10).default([]),
   questions: z.array(AgentQuestionSchema).max(20).default([]),
   findings: z.array(AgentFindingSchema).max(50).default([]),
@@ -58,10 +57,9 @@ const DOCUMENT_MARKER = '=== DOCUMENT ===';
 export const AGENT_OUTPUT_FORMAT = [
   'Answer format — plain text, no JSON, no code fence around the whole answer:',
   '',
-  'STATUS: <generated | approved | rejected | needs_input>',
+  'STATUS: <generated | approved | rejected>',
   'SUMMARY: <one line saying what you did or decided>',
   'FINDING [<id>]: <what is wrong and what would fix it>   (one line per defect, only when rejected)',
-  'QUESTION [<id>]: <a specific question>                  (one line per question, only when needs_input)',
   DOCUMENT_MARKER,
   '<the full document in markdown, only when generated>',
   '',

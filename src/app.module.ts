@@ -7,6 +7,7 @@ import { ApiSpecsModule } from './modules/api-specs/api-specs.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { DashboardModule } from './modules/dashboard/dashboard.module.js';
 import { IngestModule } from './modules/ingest/ingest.module.js';
+import { IntegrationsModule } from './modules/integrations/integrations.module.js';
 import { ProjectsModule } from './modules/projects/projects.module.js';
 import { RepsModule } from './modules/reps/reps.module.js';
 import { ResultsModule } from './modules/results/results.module.js';
@@ -37,6 +38,7 @@ import { QueueModule } from './queue/queue.module.js';
     IngestModule,
     ApiSpecsModule,
     RepsModule,
+    IntegrationsModule,
   ],
 })
 export class AppModule {}

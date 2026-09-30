@@ -1,4 +1,18 @@
-import { BadRequestException, Controller, Get, Param, Post, Query, Req, Res } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  Res,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type {
@@ -15,10 +29,11 @@ import { ProjectsService } from '../projects/projects.service.js';
 import { ApiSpecsService } from './api-specs.service.js';
 import { SpecDiffQueryDto } from './dto/spec-diff.query.dto.js';
 import { UploadApiSpecDto } from './dto/upload-api-spec.dto.js';
+import { UpdateApiSpecDto } from './dto/update-api-spec.dto.js';
 
 /**
- * OpenAPI snapshots for one project. Uploaded by a person from the UI, not by
- * CI, so these routes take a session rather than a project token.
+ * OpenAPI snapshots for the services in one project. Uploaded by a person from
+ * the UI, not by CI, so these routes take a session rather than a project token.
  */
 @Controller('api/projects/:projectId/api-specs')
 export class ApiSpecsController {
@@ -78,7 +93,11 @@ export class ApiSpecsController {
       throw new BadRequestException('no spec uploaded: expected a "file" part');
     }
     const dto = await validateDto(UploadApiSpecDto, fields);
-    return this.specs.upload(project.id, { ...file, version: dto.version }, actor);
+    return this.specs.upload(
+      project.id,
+      { ...file, serviceKey: dto.serviceKey, version: dto.version },
+      actor,
+    );
   }
 
   @Get(':specId')
@@ -88,6 +107,30 @@ export class ApiSpecsController {
   ): Promise<ApiSpecDetail> {
     const project = await this.projects.requireByRef(projectId);
     return this.specs.findOne(project.id, parseSpecId(specId));
+  }
+
+  /** Include or exclude a snapshot from automatic contract resolution. */
+  @Patch(':specId')
+  @RequireProjectRole('maintainer')
+  async update(
+    @Param('projectId') projectId: string,
+    @Param('specId') specId: string,
+    @Body() dto: UpdateApiSpecDto,
+  ): Promise<ApiSpecListItem> {
+    const project = await this.projects.requireByRef(projectId);
+    return this.specs.setActive(project.id, parseSpecId(specId), dto.active);
+  }
+
+  /** Permanently removes a snapshot; its indexed operations cascade with it. */
+  @Delete(':specId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequireProjectRole('maintainer')
+  async delete(
+    @Param('projectId') projectId: string,
+    @Param('specId') specId: string,
+  ): Promise<void> {
+    const project = await this.projects.requireByRef(projectId);
+    await this.specs.delete(project.id, parseSpecId(specId));
   }
 
   /** The document exactly as uploaded, for feeding it back into another tool. */

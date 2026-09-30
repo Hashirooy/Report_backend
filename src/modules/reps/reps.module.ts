@@ -1,8 +1,11 @@
 import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 
 import { ProjectsModule } from '../projects/projects.module.js';
+import { AgentExecutor } from './agent/agent-executor.js';
 import { ApiContractResolver } from './agent/api-contract.resolver.js';
 import { ClaudeCliExecutor } from './agent/claude-cli.executor.js';
+import { CodexCliExecutor } from './agent/codex-cli.executor.js';
 import { PromptBuilder } from './agent/prompt.builder.js';
 import { RunContextBuilder } from './agent/run-context.builder.js';
 import { SkillLibrary } from './agent/skill.library.js';
@@ -29,7 +32,16 @@ import { RepsService } from './reps.service.js';
     ApiContractResolver,
     SkillLibrary,
     PromptBuilder,
-    ClaudeCliExecutor,
+    // Which CLI backs the agent is a deployment choice, so the processor is
+    // given the abstraction and this is the one place that names a CLI.
+    {
+      provide: AgentExecutor,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService): AgentExecutor =>
+        config.getOrThrow<string>('reps.provider') === 'codex'
+          ? new CodexCliExecutor(config)
+          : new ClaudeCliExecutor(config),
+    },
     RepsJobProcessor,
     RepsRecoveryService,
   ],

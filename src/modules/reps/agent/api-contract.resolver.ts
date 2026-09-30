@@ -51,8 +51,8 @@ export class ApiContractResolver {
   constructor(private readonly prisma: PrismaService) {}
 
   async resolve(input: ContractInput): Promise<ResolvedContract> {
-    const spec = await this.pickSpec(input.projectId, input.runStartedAt);
-    if (!spec) {
+    const specs = await this.pickSpecs(input.projectId, input.runStartedAt);
+    if (!specs.length) {
       return {
         json: { status: 'no_spec' },
         digest:
@@ -61,69 +61,102 @@ export class ApiContractResolver {
       };
     }
 
-    const specInfo = {
+    const specInfo = (spec: (typeof specs)[number]) => ({
       id: idOf(spec.id),
+      serviceKey: spec.serviceKey,
       title: spec.title,
       version: spec.version,
       uploadedAt: isoOf(spec.createdAt),
       /** Whether this is the contract in force when the run started, or only the newest. */
       selectedBy: spec.selectedBy,
-    };
+    });
 
     const calls = observedCalls(input.attachments, input.testName);
     if (!calls.length) {
       return {
-        json: { status: 'no_call', spec: specInfo },
+        json: { status: 'no_call', specs: specs.map(specInfo) },
         digest:
-          `API contract: spec "${spec.title}" ${spec.version} exists, but the test's HTTP call ` +
-          'could not be identified — the Swagger section is "Не указано".',
+          `API contract: ${specs.length} active service specification(s) exist, but the test's ` +
+          'HTTP call could not be identified — the Swagger section is "Не указано".',
       };
     }
 
     const operations = await this.prisma.apiOperation.findMany({
-      where: { specId: spec.id },
-      select: { method: true, path: true },
+      where: { specId: { in: specs.map((spec) => spec.id) } },
+      select: { specId: true, method: true, path: true },
     });
-    const document = spec.document as Json;
+    const specsById = new Map(specs.map((spec) => [spec.id.toString(), spec]));
 
     const matched: Json[] = [];
     const unmatched: ObservedCall[] = [];
     for (const call of calls) {
-      const operation = bestMatch(call, operations);
-      if (!operation) {
+      const matches = bestMatches(call, operations);
+      if (!matches.length) {
         unmatched.push(call);
         continue;
       }
-      if (matched.some((m) => m.method === operation.method && m.path === operation.path)) continue;
-      matched.push({
-        ...operationContract(document, operation.method, operation.path),
-        calledAs: `${call.method} ${call.path}`,
-        matchedBy: call.source,
-      });
+
+      // Equally specific paths may legitimately exist in several services.
+      // Keep every tied match so the report never silently borrows one
+      // service's contract merely because its database row happened to come first.
+      for (const operation of matches) {
+        const spec = specsById.get(operation.specId.toString());
+        if (!spec) continue;
+        if (
+          matched.some(
+            (item) =>
+              item.specId === idOf(spec.id) &&
+              item.method === operation.method.toUpperCase() &&
+              item.path === operation.path,
+          )
+        ) {
+          continue;
+        }
+        const document = spec.document as Json;
+        matched.push({
+          ...operationContract(document, operation.method, operation.path),
+          specId: idOf(spec.id),
+          serviceKey: spec.serviceKey,
+          spec: specInfo(spec),
+          servers: serverUrls(document),
+          calledAs: `${call.method} ${call.path}`,
+          matchedBy: call.source,
+        });
+      }
     }
 
     const json: Json = {
       status: matched.length ? 'matched' : 'no_match',
-      spec: specInfo,
-      servers: serverUrls(document),
+      specs: specs.map(specInfo),
       operations: matched,
       /** Calls with no operation in the spec. The endpoint is undocumented there. */
       unmatchedCalls: unmatched,
     };
     if (unmatched.length) {
-      json.documentedPaths = [...new Set(operations.map((o) => `${o.method.toUpperCase()} ${o.path}`))]
+      json.documentedPaths = [
+        ...new Set(
+          operations.map((operation) => {
+            const service = specsById.get(operation.specId.toString())?.serviceKey ?? 'unknown';
+            return `${service}: ${operation.method.toUpperCase()} ${operation.path}`;
+          }),
+        ),
+      ]
         .sort()
         .slice(0, MAX_LISTED_PATHS);
     }
 
-    const described = matched.map((o) => `${String(o.method).toUpperCase()} ${String(o.path)}`);
+    const described = matched.map(
+      (operation) =>
+        `${String(operation.serviceKey)}: ${String(operation.method).toUpperCase()} ${String(operation.path)}`,
+    );
     const digest = matched.length
-      ? `API contract: spec "${spec.title}" ${spec.version} (${spec.selectedBy}), operation(s) ` +
+      ? `API contract: matched operation(s) across the active service specifications: ` +
         `${described.join(', ')} — fill the Swagger section and judge the contract violation ` +
         'only from contract.operations.'
-      : `API contract: spec "${spec.title}" ${spec.version} has no operation for ` +
-        `${unmatched.map((c) => `${c.method} ${c.path}`).join(', ')} — the Swagger section is ` +
-        '"Не указано"; the endpoint being absent from the spec may be stated, nothing else about it.';
+      : `API contract: none of the ${specs.length} active service specification(s) has an operation for ` +
+        `${unmatched.map((c) => `${c.method} ${c.path}`).join(', ')}. State this absence in ` +
+        'Ожидаемый результат, never in Предусловия. Swagger/OpenAPI does not establish an expected response ' +
+        'for the unmatched operation; Фактический результат must still state the concrete observed behavior.';
 
     return { json, digest };
   }
@@ -133,30 +166,64 @@ export class ApiContractResolver {
    * judged against March's spec, not one uploaded afterwards. A run older than
    * every upload falls back to the newest, and says so.
    */
-  private async pickSpec(projectId: bigint, runStartedAt: Date | null) {
-    const select = { id: true, title: true, version: true, createdAt: true, document: true };
+  private async pickSpecs(projectId: bigint, runStartedAt: Date | null) {
+    const snapshots = await this.prisma.apiSpec.findMany({
+      where: { projectId, active: true },
+      select: {
+        id: true,
+        serviceKey: true,
+        createdAt: true,
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    });
 
-    if (runStartedAt) {
-      const current = await this.prisma.apiSpec.findFirst({
-        where: { projectId, createdAt: { lte: runStartedAt } },
-        select,
-        orderBy: { createdAt: 'desc' },
-      });
-      if (current) return { ...current, selectedBy: 'uploaded_before_run' as const };
+    const latest = new Map<string, (typeof snapshots)[number]>();
+    const atRun = new Map<string, (typeof snapshots)[number]>();
+    for (const snapshot of snapshots) {
+      if (!latest.has(snapshot.serviceKey)) latest.set(snapshot.serviceKey, snapshot);
+      if (
+        runStartedAt &&
+        snapshot.createdAt <= runStartedAt &&
+        !atRun.has(snapshot.serviceKey)
+      ) {
+        atRun.set(snapshot.serviceKey, snapshot);
+      }
     }
 
-    const latest = await this.prisma.apiSpec.findFirst({
-      where: { projectId },
-      select,
-      orderBy: { id: 'desc' },
+    const selected = [...latest.entries()].map(([serviceKey, newest]) => {
+      const current = atRun.get(serviceKey);
+      return current
+        ? { id: current.id, selectedBy: 'uploaded_before_run' as const }
+        : { id: newest.id, selectedBy: 'latest_upload' as const };
     });
-    return latest ? { ...latest, selectedBy: 'latest_upload' as const } : null;
+    const selectedById = new Map(selected.map((item) => [item.id.toString(), item.selectedBy]));
+
+    const documents = await this.prisma.apiSpec.findMany({
+      where: { id: { in: selected.map((item) => item.id) } },
+      select: {
+        id: true,
+        serviceKey: true,
+        title: true,
+        version: true,
+        createdAt: true,
+        document: true,
+      },
+    });
+
+    return documents
+      .map((document) => ({
+        ...document,
+        selectedBy: selectedById.get(document.id.toString()) ?? ('latest_upload' as const),
+      }))
+      .sort((left, right) => left.serviceKey.localeCompare(right.serviceKey));
   }
 }
 
 /**
- * Calls in the order the test made them. A request attachment is evidence; the
- * test name is only a label someone typed, so it is used when nothing better is.
+ * The test name identifies the operation under assertion; request attachments
+ * supply its concrete deployed URL. A test may make setup calls before the
+ * target call, so an unrelated non-empty attachment must not replace the named
+ * operation merely because the target attachment was empty.
  */
 export function observedCalls(
   attachments: ContractInput['attachments'],
@@ -172,14 +239,35 @@ export function observedCalls(
     if (seen.has(key)) continue;
     seen.add(key);
     calls.push({ ...call, source: 'request_attachment' });
-    if (calls.length === MAX_OPERATIONS) return calls;
   }
-  if (calls.length) return calls;
 
   const named = /\b(GET|PUT|POST|DELETE|OPTIONS|HEAD|PATCH|TRACE)\s+(\/[^\s·\]|,;]*)/i.exec(testName);
-  return named
-    ? [{ method: named[1].toUpperCase(), path: normalizePath(named[2]), source: 'test_name' }]
-    : [];
+  if (named) {
+    const target: ObservedCall = {
+      method: named[1].toUpperCase(),
+      path: normalizePath(named[2]),
+      source: 'test_name',
+    };
+    const recordedTarget = calls.filter((call) => sameObservedEndpoint(call, target));
+    return recordedTarget.length ? recordedTarget.slice(0, MAX_OPERATIONS) : [target];
+  }
+
+  return calls.slice(0, MAX_OPERATIONS);
+}
+
+/** Same method and endpoint suffix, allowing a deployment-only base path. */
+function sameObservedEndpoint(
+  left: Pick<ObservedCall, 'method' | 'path'>,
+  right: Pick<ObservedCall, 'method' | 'path'>,
+): boolean {
+  if (left.method.toLowerCase() !== right.method.toLowerCase()) return false;
+
+  const leftParts = segments(left.path).map((part) => part.toLowerCase());
+  const rightParts = segments(right.path).map((part) => part.toLowerCase());
+  const [shorter, longer] =
+    leftParts.length <= rightParts.length ? [leftParts, rightParts] : [rightParts, leftParts];
+  const offset = longer.length - shorter.length;
+  return shorter.every((part, index) => part === longer[offset + index]);
 }
 
 /** Recognises the `{ method, url, baseURL? }` shape HTTP clients log requests in. */
@@ -233,8 +321,16 @@ export function bestMatch<T extends { method: string; path: string }>(
   call: Pick<ObservedCall, 'method' | 'path'>,
   operations: T[],
 ): T | null {
+  return bestMatches(call, operations)[0] ?? null;
+}
+
+/** Every equally specific match; ties across services must remain visible. */
+function bestMatches<T extends { method: string; path: string }>(
+  call: Pick<ObservedCall, 'method' | 'path'>,
+  operations: T[],
+): T[] {
   const called = segments(call.path);
-  let best: { operation: T; literals: number; length: number } | null = null;
+  let best: { literals: number; length: number; operations: T[] } | null = null;
 
   for (const operation of operations) {
     if (operation.method.toLowerCase() !== call.method.toLowerCase()) continue;
@@ -260,10 +356,12 @@ export function bestMatch<T extends { method: string; path: string }>(
       literals > best.literals ||
       (literals === best.literals && template.length > best.length)
     ) {
-      best = { operation, literals, length: template.length };
+      best = { literals, length: template.length, operations: [operation] };
+    } else if (literals === best.literals && template.length === best.length) {
+      best.operations.push(operation);
     }
   }
-  return best?.operation ?? null;
+  return best?.operations ?? [];
 }
 
 const segments = (path: string): string[] => path.split('/').filter(Boolean);

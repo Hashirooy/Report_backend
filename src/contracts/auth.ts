@@ -95,8 +95,8 @@ export const CreateProjectTokenSchema = z.object({
 export type CreateProjectToken = z.infer<typeof CreateProjectTokenSchema>;
 
 /**
- * The only response that ever carries the secret. It is not stored in a
- * recoverable form, so a lost token is replaced rather than looked up.
+ * A token creation response carries the secret once. Project creation also
+ * returns its initial token. Lost tokens are replaced rather than looked up.
  */
 export const CreatedProjectTokenSchema = ProjectTokenSchema.extend({
   token: z.string(),

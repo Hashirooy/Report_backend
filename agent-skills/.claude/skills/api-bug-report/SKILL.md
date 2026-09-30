@@ -1,519 +1,259 @@
 ---
 name: api-bug-report
-description: Turn raw API test findings — requests, responses, logs, Swagger/OpenAPI contracts and tester notes — into a structured, reproducible bug report. Use when the requested document is a bug report about API behaviour rather than a general analysis.
+description: Generate a reproducible Russian API bug report from a failed API test, its recorded request and response, and the matching Swagger/OpenAPI operation.
 ---
 
-# API Bug Report Generator
-
-## Role
-
-You are an expert QA Engineer specializing in API testing.
-
-Your task is to transform raw API test findings, logs, requests, responses, Swagger/OpenAPI information, and tester observations into a clear, reproducible, technically accurate bug report.
-
-You must NOT invent technical details that were not provided.
-
----
-
-## Input
-
-The input may contain any combination of:
-
-* endpoint
-* HTTP method
-* request URL
-* request headers
-* request body
-* query parameters
-* path parameters
-* expected status code
-* actual status code
-* expected response
-* actual response
-* Swagger/OpenAPI contract
-* error message
-* logs
-* reproduction steps
-* environment
-* test data
-* tester's description of the problem
-
-The input can be incomplete or written informally.
-
-Example:
-
-> POST /api/users returns 200 when invalid email is sent. Swagger says 400.
-
-The agent must transform this into a structured bug report.
-
----
-
-# Main Rules
-
-## 1. Never invent information
-
-Do not invent:
-
-* status codes
-* response bodies
-* headers
-* request parameters
-* database values
-* environment names
-* root causes
-* business requirements
-* expected behavior
-
-If information is missing, explicitly mark it as:
-
-`Не указано`
-
-or omit the section if it is optional.
-
----
-
-## 2. Write the report in Russian
-
-The whole report is written in Russian, regardless of the language of the input
-(English notes, logs or Swagger descriptions are translated). Only these stay as
-they are: section labels `Swagger`, `Severity`, `Priority`, their values
-(`Major`, `High`…), the `[API]` prefix, HTTP methods, endpoints, status codes
-with their standard names (`500 Internal Server Error`), field names, headers,
-JSON and log excerpts.
-
----
-
-## 3. Prefer contract-based validation
-
-If Swagger/OpenAPI is provided, use it as the primary source for determining expected API behavior.
-
-Compare:
-
-* HTTP method
-* endpoint
-* required parameters
-* parameter types
-* required/optional fields
-* request schema
-* response schema
-* expected status codes
-* response structure
-* field types
-* validation rules
-
-If actual API behavior contradicts the OpenAPI contract, identify this as a potential defect.
-
----
-
-## 4. The contract comes from `contract` in the context
-
-When the report is generated from a test result, the context carries a
-`contract` block taken from the OpenAPI spec uploaded for the project. It is the
-only source for the **Swagger** and **Нарушение контракта** sections:
-
-* `status: "matched"` — use `contract.operations[]`. List the endpoint as
-  `<METHOD> <path>` from the spec and every documented response code with its
-  `description`. Compare the actual status and the actual response body (from
-  the `HTTP response` attachment) with `responses` and their schemas: an
-  undocumented status code, a missing required field, an unknown key, a wrong
-  type are all contract violations. Name the spec version in the Swagger section:
-  `Спецификация: <title> <version>`.
-* `schemasTruncated` / `schemasOmitted` — part of the schema was cut; do not
-  claim a field is undocumented unless the part that would declare it is present.
-* `status: "no_match"` — the called endpoint has no operation in the spec.
-  Swagger section: `В спецификации <title> <version> операция <METHOD> <path> не описана.`
-  Do not borrow the contract of a similar endpoint from `documentedPaths`.
-* `status: "no_spec"` or `"no_call"` — Swagger is `Не указано`, and
-  **Нарушение контракта** is omitted.
-
-A contract given in the user request itself counts as well and takes precedence
-when the two disagree — say so in **Дополнительная информация**.
-
----
-
-## 5. Separate facts from assumptions
-
-Only describe what was actually observed.
-
-Bad:
-
-> Backend incorrectly processes the request because validation is broken.
-
-Good:
-
-> When `email` contains an invalid value, the API returns HTTP 200 instead of the HTTP 400 response defined in the OpenAPI contract.
-
-Do not state the root cause unless it is confirmed.
-
----
-
-# Bug Report Format
-
-The report is written in Russian and always follows the reference example
-below (see **Reference Example**). Its sections, their order and their labels
-are fixed:
-
-1. **Заголовок:** — `[API] <METHOD> <endpoint> <что не так>`. When the method or
-   endpoint is unknown, leave them out: `[API] <что не так>`. Never put
-   `Не указано` into the title.
-2. **Окружение:** — environment name (DEV, STAGE, PROD…) or `Не указано`.
-3. **Эндпоинт:** — `<METHOD> <endpoint as in Swagger>`.
-4. **Предусловия:** — data/state that must exist before reproduction, or `Нет`.
-5. **Шаги воспроизведения:** — numbered, concrete steps.
-6. **Ожидаемый результат:** — behaviour required by the contract/requirements.
-7. **Фактический результат:** — what was actually observed.
-8. **Swagger:** — the endpoint and the response codes the contract documents,
-   each with its meaning. `Не указано` if no contract was given.
-9. **Нарушение контракта:** — one or two sentences stating exactly how the
-   actual behaviour contradicts the contract. Omit the whole section, label
-   included, when no contract was given.
-10. **Severity:** — Blocker / Critical / Major / Minor / Trivial.
-11. **Priority:** — Highest / High / Medium / Low.
-
-Optional sections, inserted between **Фактический результат** and **Swagger**
-only when the data was actually provided:
-
-* **Запрос:** — headers, path/query parameters, body (code blocks).
-* **Ответ:** — actual status and body (code blocks).
-* **Дополнительная информация:** — logs, request/correlation IDs, test case IDs
-  (place it after **Priority**).
-
-Formatting:
-
-* Each label is bold and ends with a colon, on its own line; its value starts on
-  the next line after a blank line, so the Markdown renders sections separately.
-* Swagger response codes are a bulleted list: `- 200 — заявка успешно получена.`
-* Use code blocks only for JSON, headers and raw responses.
-* No tables, no extra headings, no sections other than the ones above.
-
-## Missing information
-
-If a value is not in the input, write `Не указано`. Never fill it in.
-
-If data required for reproduction is missing, add at the end:
-
-```text
-Недостаточно данных для воспроизведения:
-- ...
-```
-
-## Severity and Priority
-
-Base both on the observable impact, not on the mere fact that the API is wrong.
-If the input states them, use the stated values. If the impact cannot be judged
-from the input, write `Недостаточно данных для определения`.
-
-Guidance:
-
-* **Major / High** — a core operation fails for valid input (e.g. 5xx instead
-  of 200 on reading an existing entity) with no workaround.
-* **Critical / Highest** — data loss, security issue, or a whole flow blocked.
-* **Minor / Medium–Low** — wrong but harmless details (field format, message
-  text, undocumented but correct-in-spirit code).
-
----
-
-# API-Specific Validation
-
-When analyzing an API defect, check the following dimensions.
-
-### HTTP Method
-
-Check whether the actual method matches the contract.
-
-### URL
-
-Check:
-
-* path
-* path parameters
-* version
-* trailing segments
-
-### Query Parameters
-
-Check:
-
-* required parameters
-* parameter names
-* types
-* allowed values
-
-### Headers
-
-Check relevant headers such as:
-
-* Authorization
-* Content-Type
-* Accept
-* correlation/request ID
-
-### Request Body
-
-Check:
-
-* required fields
-* missing fields
-* extra fields
-* field types
-* nullability
-* formats
-* enum values
-* validation constraints
-
-### Response
-
-Check:
-
-* status code
-* response body
-* schema
-* field names
-* field types
-* required fields
-* error format
-
----
-
-# Swagger/OpenAPI Rules
-
-When Swagger is available, perform this comparison:
-
-```text
-Swagger/OpenAPI
-      ↓
-Expected behavior
-      ↓
-Actual request
-      ↓
-Actual response
-      ↓
-Difference
-      ↓
-Bug report
-```
-
-Examples of defects:
-
-### Status code mismatch
-
-Swagger:
-
-```text
-400 Bad Request
-```
-
-Actual:
-
-```text
-200 OK
-```
-
-Report as a contract/behavior mismatch.
-
-### Schema mismatch
-
-Swagger:
-
-```json
-{
-  "id": 123
-}
-```
-
-Actual:
-
-```json
-{
-  "id": "123"
-}
-```
-
-Report the type mismatch.
-
-### Missing required field
-
-Swagger:
-
-```text
-email: required
-```
-
-Actual:
-
-```text
-POST request without email
-→ 200 OK
-```
-
-Report that the API accepts a request violating the declared contract.
-
-### Undocumented response
-
-Swagger documents:
-
-```text
-200
-400
-404
-```
-
-Actual:
-
-```text
-500
-```
-
-Report the undocumented/unexpected response if the 500 behavior is reproducible.
-
----
-
-# Title Generation Rules
-
-**Заголовок** must be concise, specific, searchable and technical.
-
-Preferred format:
-
-```text
-[API] <METHOD> <endpoint> <что не так>
-```
-
-Examples:
-
-```text
-[API] GET /api/v1/applications/{id} возвращает 500 вместо 200 для существующей заявки
-[API] POST /users возвращает 200 для невалидного email
-[API] DELETE /users/{id} возвращает 200 для несуществующего пользователя
-```
-
-Avoid: `Баг API`, `Не работает`, `Проблема с эндпоинтом`.
-
----
-
-# Reproduction Rules
-
-A bug report must allow another QA engineer or developer to reproduce the issue without asking unnecessary clarification questions.
-
-Include exact:
-
-* endpoint
-* method
-* parameters
-* request body
-* expected behavior
-* actual behavior
-
-when those values are available.
-
-If critical information is missing, do not fabricate it.
-
-Instead add the `Недостаточно данных для воспроизведения:` block described above.
-
----
-
-# Root Cause
-
-Do NOT provide a root cause unless there is direct evidence.
-
-Do not write:
-
-> Root cause: backend validation is missing.
-
-Instead write:
-
-> Possible cause: validation may not be applied to the `email` field.
-
-Only include a "Possible Cause" section when the user explicitly asks for analysis.
-
----
-
-# Duplicate Detection
-
-If several observations describe the same underlying defect, do not create multiple bugs automatically.
-
-Group them when:
-
-* same endpoint
-* same functionality
-* same root behavior
-* same contract violation
-
-If they represent different defects, create separate bug reports.
-
----
-
-# Output Rules
-
-Return ONLY the finished bug report unless the user explicitly asks for analysis.
-
-Do not add:
-
-* greetings
-* explanations of your process
-* disclaimers
-* QA theory
-* unnecessary comments
-
----
-
-# Reference Example
-
-This is the target output. Every report must look like it: same labels, same
-order, same level of detail and tone.
-
-## Input
-
-```text
-DEV. GET /api/v1/applications/12345 с валидным токеном отдаёт 500.
-Заявка 12345 существует. По Swagger: 200 — заявка получена, 404 — не найдена.
-```
-
-## Output
-
-**Заголовок:**
-
-[API] GET /api/v1/applications/{id} возвращает 500 вместо 200 для существующей заявки
-
-**Окружение:**
-
+# API Bug Report
+
+Write a finished API bug report in Russian. Use only facts present in the user
+request or structured context. Do not infer missing request or response values,
+contract fields, status codes, environment, business impact, or unobserved
+implementation root causes. A cause-and-effect explanation derived from the
+recorded response, matcher output, test evidence, and matching contract is
+required; distinguish that evidenced failure mechanism from speculation about
+why the service or test code was implemented that way.
+
+## Required evidence
+
+Before generating a report, establish:
+
+- the environment;
+- the HTTP method and endpoint;
+- the preconditions and request condition that trigger the defect;
+- the matching Swagger/OpenAPI operation and exact relevant contract rule;
+- the concrete expected result;
+- the concrete observed result.
+
+Use `context.contract.operations[]` as the Swagger source when
+`context.contract.status` is `matched`. The failed test supplies the scenario
+and may contain a concrete expectation, but its name, the word `schema`, or an
+assertion such as `expect(...).not.toThrow()` does not define the API contract.
+
+When `context.contract.status` is `no_match`, explicitly state in
+`Ожидаемый результат` that the observed `<METHOD> <path>` operation is not
+described in the supplied Swagger/OpenAPI specification. Do not put this fact
+in `Предусловия`: it is contract evidence, not data state or an authorization
+condition. If an expected API behavior is established by an explicit
+requirement, state it as well; otherwise say that the expected behavior cannot
+be established from Swagger/OpenAPI. The absence of a matching operation never
+replaces the observed behavior in `Фактический результат`.
+
+Use recorded HTTP request and response attachments as evidence of what was
+sent and received. An attachment with `contentAvailable: false`, `empty: true`,
+or an `unavailableReason` contains no usable evidence. Do not treat a zero-byte
+attachment as proof that the HTTP request or response itself had an empty body.
+Do not infer its headers, parameters or body from another request in the test.
+
+When `context.bugReportEvidence` is present, use it as the primary joined index
+of the target operation, recorded exchange, assertion and relevant contract
+rule. For `Фактический ответ`, copy `response.exactHttpFragment` verbatim and
+describe only `response.primaryMismatch`. The fragment was rendered from one
+complete value at one source path. Do not add another `mismatchGroups` item,
+wrap it in a reconstructed parent object or array, remove or reorder fields,
+or replace nested data with ellipses. The original `attachments` and
+`contract` remain authoritative when the prepared evidence is absent or needs
+verification.
+
+If `context.bugReportEvidence.request.contentAvailable` is false, no concrete
+request payload was recorded. Availability fields such as `contentAvailable`,
+`unavailableReason`, `empty`, and attachment names are control metadata:
+never mention them in the report, especially not in Preconditions or Steps.
+For an explicitly successful response-schema scenario, describe sending a valid
+request containing all required fields from
+
+For the detailed failure, prefer `context.result.assertion.actual` over
+`context.result.message` whenever `assertion.actual` is present. This field
+retains the matcher output that Allure may shorten in `message`. If `message`
+contains `…`, `...`, `truncated`, or an incomplete fragment such as
+`Unrecognized key: "…`, never quote it as the complete error and never infer the
+hidden text. Read the field names, values, types and validation details from
+`assertion.actual` instead. If neither the response attachment nor
+`assertion.actual` contains the missing detail, mark that detail as
+`Не установлено по данным отчёта` in the relevant section.
+
+Determine which layer actually failed before writing the report: the API
+response, transport metadata, the Swagger/OpenAPI contract, or the test runtime
+validator/schema. Explain the evidence chain rather than copying the matcher
+message. In particular, when the matcher rejects a response property but the
+matching Swagger/OpenAPI operation allows that property, state that the runtime
+validation rule disagrees with the supplied contract and that this disagreement
+caused the matcher failure. Do not mislabel the allowed property as an API
+schema violation. Name a concrete library or construct such as Zod or
+`strictObject()` only when it is present in the supplied context; otherwise use
+the evidenced wording `runtime-схема проверки` or `валидатор теста`.
+
+One report covers exactly one defect: the mismatch that caused the recorded
+assertion. Omit every independent mismatch from this report. In particular, do
+not mention a Content-Type disagreement in a report about a runtime validator
+rejecting a contract-allowed field; create a separate report for that defect
+instead.
+
+`context.result.assertion.expected` is test evidence, not an API contract. Use
+it only when it agrees with the matching Swagger/OpenAPI operation or an
+explicit requirement.
+
+Never ask the user for missing facts and never return `needs_input`. Always
+generate the finished report from the available evidence. When a required fact
+is absent, write `Не установлено по данным отчёта` in the relevant section. Do
+not invent a value, add a separate missing-data list, or replace missing API
+steps with instructions to run an automated test.
+
+## Exact output structure
+
+The finished report has one title followed by exactly these nine sections in
+this order:
+
+1. `# [API] ...` — the report title;
+2. `**Окружение:**`;
+3. `**Метод и эндпоинт:**`;
+4. `**Предусловия:**`;
+5. `**Шаги воспроизведения:**`;
+6. `**Фактический результат:**`;
+7. `**Ожидаемый результат:**`;
+8. `**Дефект:**`;
+9. `**Фактический ответ:**`;
+10. `**Ожидаемый ответ:**`.
+
+Do not add Priority, Severity, Swagger, contract violation, request, additional
+information, analysis, caveats, or a missing-data list.
+
+Use the formatting shown in the reference example exactly:
+
+- the title is a level-one Markdown heading;
+- every section label is bold and ends with a colon;
+- for a short scalar value, put a Markdown hard line break (`\`) after the
+  label and write the value on the next line;
+- put a blank line between a label and a following list or fenced response;
+- Preconditions use a bulleted list, Steps use a numbered list;
+- Actual and expected raw responses use fenced `http` blocks.
+
+## Field rules
+
+### Title
+
+Use `[API] <METHOD> <contract endpoint> <concrete mismatch>`. Name the observed
+mismatch, including the relevant status, field, value, or type. Use the
+parameterized contract path in the title, for example `{id}`, while concrete
+test values belong in Preconditions and Steps.
+
+### Окружение
+
+Use the environment exactly as supplied, for example `DEV`, `STAGE`, or `PROD`.
+
+### Метод и эндпоинт
+
+Write `<METHOD> <contract endpoint>` using the parameterized Swagger/OpenAPI
+path when available.
+
+### Предусловия
+
+List only state or data that must already exist and known authorization
+conditions. Keep concrete identifiers that distinguish the scenario. Never
+list the absence of an operation in Swagger/OpenAPI as a precondition. Never
+put evidence-quality commentary here, such as saying that an absent header or
+body was not confirmed by the recorded request; omit an unconfirmed condition
+or state the evidence limitation only in the section whose conclusion it
+affects.
+
+### Шаги воспроизведения
+
+Describe reproduction through the API, not through the test runner:
+
+1. Send the request to the concrete URL, substituting known path parameters.
+2. Add authorization or other required conditions when known.
+3. Send the request.
+
+Include request fields, query parameters, headers, or test data only when they
+affect reproduction and their values or conditions are known. Never instruct
+the reader to run a test file or inspect an assertion.
+
+### Фактический и ожидаемый результат
+
+`Фактический результат` contains only directly observed behavior: the concrete
+HTTP status, response path and value, and the exact validator error. It never
+cites Swagger/OpenAPI, explains the cause, or identifies the faulty layer. Use
+at most two short sentences.
+
+`Ожидаемый результат` contains only the concrete behavior required by the
+matching Swagger/OpenAPI operation or an explicit requirement. For a runtime
+validator mismatch, state which recorded field and type must be accepted and
+that validation must succeed. Use at most two short sentences.
+
+### Дефект
+
+Compare the actual and expected results and explain exactly why they differ.
+For a schema or matcher failure, state what the validator rejected, what the
+matching contract permits or requires, why the disagreement caused the test to
+fail, and which layer must be corrected. If a matcher rejects a contract-allowed
+field, identify the runtime validation schema as the faulty layer and do not call
+the API response invalid. Use at most three short sentences. Do not list every
+occurrence, unrelated fields, or the complete response schema. Name only facts
+from the current context.
+
+For `context.contract.status: "no_match"`, keep the concrete value from
+`context.result.assertion.actual` in `Фактический результат`. In
+`Ожидаемый результат`, state that the operation is absent from the supplied
+Swagger/OpenAPI specification and therefore Swagger/OpenAPI does not establish
+an expected response for it, unless an explicit requirement supplies one.
+
+### Фактический и ожидаемый ответ
+
+Show the minimal raw HTTP response fragment that demonstrates the mismatch.
+For a status-only defect, write the HTTP status line. Preserve an available
+response body exactly; do not invent one. The expected response must contain
+only facts established by Swagger/OpenAPI or explicit requirements. A required
+property and its type do not establish its concrete value: never fill expected
+JSON with `0`, an empty string, a placeholder, a schema example, or any other
+guessed value. When the contract establishes only a status or schema rule, show
+only the established status line; if no raw expected fragment is established,
+write `Не установлено по данным отчёта`.
+For a runtime-validator mismatch where the recorded API field is allowed by the
+contract, show only the contract-established HTTP status line in
+`Ожидаемый ответ`. Do not add an unrelated media type or repeat the response
+schema: the expected validator correction belongs in `Ожидаемый результат`.
+If
+`context.contract.status` is `no_match` and no explicit requirement establishes
+an expected response, write `Не установлено по данным отчёта` in the expected
+response block.
+
+## Reference example
+
+# [API] GET /api/v1/applications/{id} возвращает 500 вместо 200 для существующей заявки
+
+**Окружение:**\
 DEV
 
-**Эндпоинт:**
-
-GET /api/v1/applications/{id}
+**Метод и эндпоинт:**\
+`GET /api/v1/applications/{id}`
 
 **Предусловия:**
 
-Существует заявка с id = 12345.
+- В системе существует заявка с `id=12345`.
+- Используется валидный токен авторизации.
 
 **Шаги воспроизведения:**
 
-1. Отправить GET-запрос на /api/v1/applications/12345.
+1. Отправить GET-запрос на `/api/v1/applications/12345`.
 2. Передать валидный токен авторизации.
+3. Отправить запрос.
 
-**Ожидаемый результат:**
+**Фактический результат:**\
+API возвращает HTTP-статус `500 Internal Server Error`.
 
-API возвращает HTTP 200 OK и данные заявки в соответствии со схемой ответа, указанной в Swagger.
+**Ожидаемый результат:**\
+API должен вернуть HTTP-статус `200 OK` и данные существующей заявки с идентификатором `12345`.
 
-**Фактический результат:**
+**Дефект:**\
+Вместо предусмотренного контрактом HTTP `200 OK` API возвращает HTTP `500 Internal Server Error`, поэтому успешное получение существующей заявки невозможно.
 
-API возвращает HTTP 500 Internal Server Error.
+**Фактический ответ:**
 
-**Swagger:**
+```http
+HTTP/1.1 500 Internal Server Error
+```
 
-GET /api/v1/applications/{id}
+**Ожидаемый ответ:**
 
-- 200 — заявка успешно получена.
-- 404 — заявка не найдена.
-
-**Нарушение контракта:**
-
-Для существующей заявки API возвращает HTTP 500 Internal Server Error, который не предусмотрен Swagger-контрактом. Согласно контракту, для успешно найденной заявки должен возвращаться HTTP 200 OK.
-
-**Severity:**
-
-Major
-
-**Priority:**
-
-High
+```http
+HTTP/1.1 200
+```

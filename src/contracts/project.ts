@@ -24,6 +24,10 @@ export const ProjectSchema = z.object({
 });
 export type Project = z.infer<typeof ProjectSchema>;
 
+/** The new project's CI secret is returned once, in the create response only. */
+export const CreatedProjectSchema = ProjectSchema.extend({ ingestToken: z.string() });
+export type CreatedProject = z.infer<typeof CreatedProjectSchema>;
+
 export const ProjectListItemSchema = ProjectSchema.pick({
   id: true,
   slug: true,

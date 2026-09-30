@@ -8,4 +8,5 @@ export * from './dashboard.js';
 export * from './ingest.js';
 export * from './reps.js';
 export * from './api-spec.js';
+export * from './integration.js';
 export * from './routes.js';
